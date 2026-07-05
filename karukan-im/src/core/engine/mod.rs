@@ -294,6 +294,12 @@ impl InputMethodEngine {
             // as a literal emoji-query char (and so a Katakana-mode user
             // lands back in Katakana, not Hiragana).
             self.exit_emoji_mode();
+            // Alphabet mode is a per-composition convenience entered by
+            // Shift+letter. If the user erases the pending alphabet text
+            // before committing it, end that temporary mode as well.
+            if self.input_mode == InputMode::Alphabet {
+                self.input_mode = InputMode::Hiragana;
+            }
             Some(
                 EngineResult::consumed()
                     .with_action(EngineAction::UpdatePreedit(Preedit::new()))

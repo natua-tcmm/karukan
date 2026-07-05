@@ -193,6 +193,44 @@ fn test_alphabet_mode_direct_input() {
 }
 
 #[test]
+fn test_erasing_alphabet_input_returns_to_hiragana_mode() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press_shift('A'));
+    assert!(engine.input_mode == InputMode::Alphabet);
+    assert_eq!(engine.preedit().unwrap().text(), "A");
+
+    engine.process_key(&press_key(Keysym::BACKSPACE));
+    assert!(engine.input_mode == InputMode::Hiragana);
+    assert!(matches!(engine.state(), InputState::Empty));
+
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "あ");
+}
+
+#[test]
+fn test_delete_all_alphabet_input_returns_to_hiragana_mode() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press_shift('A'));
+    engine.process_key(&press('b'));
+    assert!(engine.input_mode == InputMode::Alphabet);
+    assert_eq!(engine.preedit().unwrap().text(), "Ab");
+
+    engine.process_key(&press_key(Keysym::HOME));
+    engine.process_key(&press_key(Keysym::DELETE));
+    assert!(engine.input_mode == InputMode::Alphabet);
+    assert_eq!(engine.preedit().unwrap().text(), "b");
+
+    engine.process_key(&press_key(Keysym::DELETE));
+    assert!(engine.input_mode == InputMode::Hiragana);
+    assert!(matches!(engine.state(), InputState::Empty));
+
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "あ");
+}
+
+#[test]
 fn test_mixed_hiragana_alphabet_input() {
     let mut engine = InputMethodEngine::new();
 
