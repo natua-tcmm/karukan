@@ -2,9 +2,16 @@ use super::*;
 
 // --- Candidate preservation tests ---
 
+fn commit_text(result: &EngineResult) -> Option<&str> {
+    result.actions.iter().find_map(|a| match a {
+        EngineAction::Commit(text) => Some(text.as_str()),
+        _ => None,
+    })
+}
+
 #[test]
-fn test_live_text_preserved_in_conversion_via_down() {
-    // When DOWN is pressed during live conversion, the AI inference result
+fn test_live_text_preserved_in_conversion_via_space() {
+    // When Space is pressed during live conversion, the AI inference result
     // (live_conversion_text) should appear in the candidate list.
     let mut engine = make_live_conversion_engine();
 
@@ -13,8 +20,8 @@ fn test_live_text_preserved_in_conversion_via_down() {
     engine.process_key(&press('i'));
     engine.live.text = "愛".to_string();
 
-    // Press DOWN → start_conversion()
-    let result = engine.process_key(&press_key(Keysym::DOWN));
+    // Press Space → start_conversion()
+    let result = engine.process_key(&press_key(Keysym::SPACE));
     assert!(result.consumed);
     assert!(matches!(engine.state(), InputState::Conversion { .. }));
 
@@ -27,6 +34,61 @@ fn test_live_text_preserved_in_conversion_via_down() {
 }
 
 #[test]
+fn tab_selects_visible_composing_candidate_then_enter_commits_it() {
+    let mut engine = InputMethodEngine::new();
+
+    // "a" has composing-time rewriter candidates: あ, ア, ｱ.
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    assert!(engine.composing_candidates.is_some());
+
+    // First Tab opts into the visible first suggestion without opening
+    // explicit Conversion state.
+    let first = engine.process_key(&press_key(Keysym::TAB));
+    assert!(first.consumed);
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), "アイ");
+
+    // Second Tab advances to the next visible suggestion.
+    let second = engine.process_key(&press_key(Keysym::TAB));
+    assert!(second.consumed);
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), "ｱｲ");
+
+    let commit = engine.process_key(&press_key(Keysym::RETURN));
+    assert_eq!(commit_text(&commit), Some("ｱｲ"));
+    assert!(matches!(engine.state(), InputState::Empty));
+}
+
+#[test]
+fn down_selects_visible_composing_candidate_like_tab() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    let result = engine.process_key(&press_key(Keysym::DOWN));
+    assert!(result.consumed);
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), "アイ");
+
+    let commit = engine.process_key(&press_key(Keysym::RETURN));
+    assert_eq!(commit_text(&commit), Some("アイ"));
+}
+
+#[test]
+fn enter_without_tab_keeps_traditional_composing_commit() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    assert!(engine.composing_candidates.is_some());
+
+    let commit = engine.process_key(&press_key(Keysym::RETURN));
+    assert_eq!(commit_text(&commit), Some("あい"));
+    assert!(matches!(engine.state(), InputState::Empty));
+}
+
+#[test]
 fn test_live_text_not_duplicated_in_conversion() {
     // If the live_text matches the reading, it should not be duplicated
     let mut engine = make_live_conversion_engine();
@@ -36,7 +98,7 @@ fn test_live_text_not_duplicated_in_conversion() {
     // live_conversion_text same as hiragana reading → should not be added
     engine.live.text = "あい".to_string();
 
-    let result = engine.process_key(&press_key(Keysym::DOWN));
+    let result = engine.process_key(&press_key(Keysym::SPACE));
     assert!(result.consumed);
     assert!(matches!(engine.state(), InputState::Conversion { .. }));
 
@@ -85,8 +147,8 @@ fn test_empty_live_text_not_added_to_candidates() {
     // Force empty to test the "no live text" scenario
     engine.live.text.clear();
 
-    // DOWN → start_conversion()
-    let result = engine.process_key(&press_key(Keysym::DOWN));
+    // Space → start_conversion()
+    let result = engine.process_key(&press_key(Keysym::SPACE));
     assert!(result.consumed);
 
     // Should have candidates but no empty-string candidate

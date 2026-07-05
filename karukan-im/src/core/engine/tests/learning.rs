@@ -1,7 +1,7 @@
-//! Tests for the learning cache and the Tab-skips-learning behavior.
+//! Tests for the learning cache and composing-time suggestion selection.
 //!
-//! Space/Down: include learning candidates (default conversion).
-//! Tab: skip learning candidates (lets users escape stale learned entries).
+//! Space opens the explicit conversion list with learning candidates included.
+//! Tab/Down select the auto-suggest list already shown during composing.
 
 use karukan_engine::LearningCache;
 
@@ -9,8 +9,7 @@ use super::*;
 
 /// Engine seeded with a learning entry `reading → surface`, no kanji model.
 /// We bypass `init.rs` (which gates learning on settings + file I/O) and just
-/// inject a populated `LearningCache` directly — these tests assert the
-/// build_conversion_candidates branching, not the load path.
+/// inject a populated `LearningCache` directly.
 fn engine_with_learned(reading: &str, surface: &str) -> InputMethodEngine {
     let mut engine = InputMethodEngine::new();
     engine.converters.kanji = None;
@@ -49,14 +48,15 @@ fn build_candidates_omits_learning_when_skipped() {
 
     assert!(
         !texts.contains(&"藍".to_string()),
-        "Tab path (skip_learning=true) must drop learned `藍`, got {:?}",
+        "Explicit skip_learning=true path must drop learned `藍`, got {:?}",
         texts,
     );
 }
 
 #[test]
-fn tab_key_skips_learning_in_composing() {
-    // End-to-end: type the reading, press Tab → learned candidate is gone.
+fn tab_key_selects_composing_learning_candidate() {
+    // End-to-end: type the reading, press Tab → opt into the auto-suggest
+    // list already shown during composing. Enter then commits that selection.
     let mut engine = engine_with_learned("あい", "藍");
 
     engine.process_key(&press('a'));
@@ -65,27 +65,22 @@ fn tab_key_skips_learning_in_composing() {
 
     let result = engine.process_key(&press_key(Keysym::TAB));
     assert!(result.consumed);
-    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), "藍");
 
-    let texts: Vec<String> = engine
-        .state()
-        .candidates()
-        .unwrap()
-        .candidates()
-        .iter()
-        .map(|c| c.text.clone())
-        .collect();
+    let commit = engine.process_key(&press_key(Keysym::RETURN));
     assert!(
-        !texts.contains(&"藍".to_string()),
-        "Tab must skip the learned `藍` candidate, got {:?}",
-        texts,
+        commit
+            .actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::Commit(text) if text == "藍"))
     );
+    assert!(matches!(engine.state(), InputState::Empty));
 }
 
 #[test]
 fn space_key_keeps_learning_in_composing() {
-    // Counterpart to tab_key_skips_learning_in_composing: Space stays on the
-    // learning-included path so the default UX is unchanged.
+    // Space stays on the learning-included explicit conversion path.
     let mut engine = engine_with_learned("あい", "藍");
 
     engine.process_key(&press('a'));

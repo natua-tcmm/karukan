@@ -11,9 +11,9 @@ fn test_mode_toggle_key_switches_alphabet_to_hiragana() {
     assert!(engine.input_mode == InputMode::Alphabet);
     engine.process_key(&press_key(Keysym::RETURN)); // commit to clear state
 
-    // Alt_R press → switch to hiragana mode
+    // Enter already returns alphabet mode to hiragana; Alt_R is therefore a no-op.
     let result = engine.process_key(&press_key(Keysym::ALT_R));
-    assert!(result.consumed);
+    assert!(!result.consumed);
     assert!(engine.input_mode != InputMode::Alphabet);
 
     // Type 'a' → should be 'あ' (hiragana mode)

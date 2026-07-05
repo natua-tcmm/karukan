@@ -77,15 +77,9 @@ fn emoji_mode_shows_candidates_via_rewriter() {
 }
 
 #[test]
-fn escape_commits_literal_and_exits_emoji_mode() {
-    // Slack-style escape: pressing ESC in emoji mode dismisses the
-    // picker AND commits whatever the user typed as plain text. Two
-    // reasons:
-    //   * The typed `:smile` shouldn't silently vanish — that would
-    //     be surprising; users expect what they typed to land somewhere.
-    //   * It gives a deliberate way to commit `:smile` literally even
-    //     when an emoji match exists, which Enter alone can't do
-    //     (Enter on a match commits the emoji).
+fn escape_is_noop_in_emoji_composing_mode() {
+    // Escape is disabled in the IME. While composing an emoji
+    // shortcode it passes through and leaves the typed text/mode untouched.
     let mut engine = InputMethodEngine::new();
     engine.process_key(&press_colon());
     for ch in ['s', 'm', 'i', 'l', 'e'] {
@@ -94,9 +88,10 @@ fn escape_commits_literal_and_exits_emoji_mode() {
     assert_eq!(engine.input_mode, InputMode::Emoji);
 
     let result = engine.process_key(&press_key(Keysym::ESCAPE));
-    assert_eq!(commit_text(&result).as_deref(), Some(":smile"));
-    assert_eq!(engine.input_mode, InputMode::Hiragana);
-    assert!(matches!(engine.state(), InputState::Empty));
+    assert!(!result.consumed);
+    assert_eq!(commit_text(&result), None);
+    assert_eq!(engine.input_mode, InputMode::Emoji);
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
 }
 
 #[test]
@@ -324,7 +319,7 @@ fn commit_emoji_restores_pre_emoji_katakana_mode() {
 }
 
 #[test]
-fn escape_emoji_restores_pre_emoji_katakana_mode() {
+fn escape_emoji_keeps_emoji_mode() {
     let mut engine = InputMethodEngine::new();
     engine.input_mode = InputMode::Katakana;
 
@@ -333,7 +328,7 @@ fn escape_emoji_restores_pre_emoji_katakana_mode() {
         engine.process_key(&press(ch));
     }
     engine.process_key(&press_key(Keysym::ESCAPE));
-    assert_eq!(engine.input_mode, InputMode::Katakana);
+    assert_eq!(engine.input_mode, InputMode::Emoji);
 }
 
 #[test]
