@@ -308,7 +308,7 @@ fn test_cursor_waseda_scenario() {
     assert_eq!(engine.preedit().unwrap().text(), "わせだだいがく");
 
     // Now let's test the fix scenario: type "waseyadaigaku" (wrong)
-    engine.reset(); // Clear current composing input
+    engine.process_key(&press_key(Keysym::ESCAPE)); // Cancel
     for ch in "waseyadaigaku".chars() {
         engine.process_key(&press(ch));
     }
@@ -358,8 +358,8 @@ fn test_cursor_composed_hiragana_tracking() {
     assert_eq!(engine.input_buf.text, "あい");
     assert_eq!(engine.input_buf.cursor_pos, 1);
 
-    // Reset should clear
-    engine.reset();
+    // Cancel should clear
+    engine.process_key(&press_key(Keysym::ESCAPE));
     assert_eq!(engine.input_buf.text, "");
     assert_eq!(engine.input_buf.cursor_pos, 0);
 }

@@ -14,7 +14,7 @@ const XKB_KEY_SPACE: u32 = Keysym::SPACE.0;
 
 fn test_server() -> ImServer {
     let mut server = ImServer::with_settings(Settings::default());
-    // Disable live conversion so the preedit stays as
+    // Disable live conversion (Ctrl+Shift+L) so the preedit stays as
     // hiragana; live conversion would require a loaded model.
     request(
         &mut server,
@@ -114,13 +114,19 @@ fn test_typing_and_commit() {
 }
 
 #[test]
-fn test_escape_does_not_cancel_composition() {
+fn test_escape_cancels_composition() {
     let mut server = test_server();
     press(&mut server, XKB_KEY_K);
     press(&mut server, XKB_KEY_A);
     let resp = press(&mut server, XKB_KEY_ESCAPE);
+    assert_eq!(resp["result"]["consumed"], true);
+    let preedits = actions_of(&resp, "update_preedit");
+    assert_eq!(preedits.last().unwrap()["text"], "");
+
+    // Key after cancel is not consumed in Empty state unless printable;
+    // Escape itself in Empty state passes through.
+    let resp = press(&mut server, XKB_KEY_ESCAPE);
     assert_eq!(resp["result"]["consumed"], false);
-    assert!(actions_of(&resp, "update_preedit").is_empty());
 }
 
 #[test]

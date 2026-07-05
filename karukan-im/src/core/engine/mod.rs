@@ -10,6 +10,7 @@ mod display;
 mod init;
 mod input;
 mod input_buffer;
+mod mode;
 mod strategy;
 mod types;
 
@@ -142,16 +143,6 @@ pub struct InputMethodEngine {
     input_buf: InputBuffer,
     /// Live conversion state
     live: LiveConversion,
-    /// Auto-suggest candidates shown while still in Composing state.
-    ///
-    /// Space still opens the explicit conversion list, but Tab/Down can walk this
-    /// composing-time list directly and Enter commits it after the user has
-    /// opted in by pressing Tab/Down.
-    composing_candidates: Option<CandidateList>,
-    /// Whether the user has explicitly selected a composing-time candidate with
-    /// Tab/Down. Enter only commits `composing_candidates` after this flag is set;
-    /// otherwise Enter keeps the traditional "commit current preedit" behavior.
-    composing_candidate_selected: bool,
     /// Internal chunking of the composing buffer used by
     /// `chunked_auto_suggest`: a cache of the per-chunk model conversions.
     /// Re-chunking diffs the new buffer against this by common prefix/suffix so
@@ -182,8 +173,6 @@ impl InputMethodEngine {
             pre_emoji_mode: None,
             input_buf: InputBuffer::new(),
             live: LiveConversion::default(),
-            composing_candidates: None,
-            composing_candidate_selected: false,
             chunks: Vec::new(),
             dicts: Dictionaries::default(),
             learning: None,
@@ -257,8 +246,6 @@ impl InputMethodEngine {
         self.pre_emoji_mode = None;
         self.input_buf.clear();
         self.live.text.clear();
-        self.composing_candidates = None;
-        self.composing_candidate_selected = false;
         self.chunks.clear();
         self.metrics = ConversionMetrics::default();
     }
@@ -318,19 +305,6 @@ impl InputMethodEngine {
             romaji_buffer,
         };
         preedit
-    }
-
-    /// Store a fresh auto-suggest candidate list for Composing state.
-    fn set_composing_candidates(&mut self, candidates: CandidateList) -> CandidateList {
-        self.composing_candidate_selected = false;
-        self.composing_candidates = Some(candidates.clone());
-        candidates
-    }
-
-    /// Clear the composing-time auto-suggest selection/list.
-    fn clear_composing_candidates(&mut self) {
-        self.composing_candidates = None;
-        self.composing_candidate_selected = false;
     }
 
     /// Convert hiragana in input_buf to katakana permanently.
@@ -484,6 +458,14 @@ impl InputMethodEngine {
             return EngineResult::not_consumed();
         }
 
+        // Ctrl+Shift+L: toggle live conversion (works in all states)
+        if key.modifiers.control_key
+            && key.modifiers.shift_key
+            && (key.keysym == Keysym::KEY_L || key.keysym == Keysym::KEY_L_UPPER)
+        {
+            return self.toggle_live_conversion();
+        }
+
         // Reset adaptive model flag when starting a new word (first key in Empty state)
         if matches!(self.state, InputState::Empty) {
             self.metrics.adaptive_use_light_model = false;
@@ -529,7 +511,6 @@ impl InputMethodEngine {
                 self.converters.romaji.reset();
                 self.input_buf.clear();
                 self.live.text.clear();
-                self.clear_composing_candidates();
                 self.state = InputState::Empty;
                 self.surrounding_context = None;
                 text
@@ -542,7 +523,6 @@ impl InputMethodEngine {
                     self.record_learning(reading, &text);
                 }
                 self.input_buf.clear();
-                self.clear_composing_candidates();
                 self.state = InputState::Empty;
                 self.surrounding_context = None;
                 text

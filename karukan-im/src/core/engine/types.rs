@@ -184,7 +184,7 @@ pub(in crate::core) struct ComposingChunk {
 /// Live conversion state: enabled flag and current converted text
 #[derive(Debug, Clone, Default)]
 pub(in crate::core) struct LiveConversion {
-    /// Whether live conversion is enabled
+    /// Whether live conversion is enabled (toggled via Ctrl+Shift+L)
     pub enabled: bool,
     /// Converted text (non-empty when live conversion produced a result)
     pub text: String,

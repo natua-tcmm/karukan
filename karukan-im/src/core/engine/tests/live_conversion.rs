@@ -29,9 +29,8 @@ fn test_live_conversion_off_unchanged() {
 }
 
 #[test]
-fn test_live_conversion_escape_is_noop_in_composing() {
-    // Escape is disabled in the IME; during composing it
-    // leaves the current input/live text untouched.
+fn test_live_conversion_escape_shows_hiragana() {
+    // Test that Escape clears live conversion text and shows hiragana
     let mut engine = make_live_conversion_engine();
 
     // Type "ai" -> "あい"
@@ -41,16 +40,17 @@ fn test_live_conversion_escape_is_noop_in_composing() {
     // Simulate live conversion being active
     engine.live.text = "愛".to_string();
 
-    // Press Escape -> should pass through without changing composing state.
+    // Press Escape -> should clear live_conversion_text and show hiragana
     let result = engine.process_key(&press_key(Keysym::ESCAPE));
-    assert!(!result.consumed);
-    assert_eq!(engine.live.text, "愛");
+    assert!(result.consumed);
+    assert!(engine.live.text.is_empty());
     assert!(matches!(engine.state(), InputState::Composing { .. }));
     assert_eq!(engine.preedit().unwrap().text(), "あい");
 }
 
 #[test]
-fn test_live_conversion_escape_twice_still_noop() {
+fn test_live_conversion_escape_twice_cancels() {
+    // Test that double Escape cancels input
     let mut engine = make_live_conversion_engine();
 
     engine.process_key(&press('a'));
@@ -59,14 +59,14 @@ fn test_live_conversion_escape_twice_still_noop() {
     // Set live conversion text
     engine.live.text = "愛".to_string();
 
-    // Escape no longer clears/cancels composing input.
+    // First Escape: clears live conversion, shows hiragana
     engine.process_key(&press_key(Keysym::ESCAPE));
     assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.live.text, "愛");
+    assert!(engine.live.text.is_empty());
 
+    // Second Escape: cancels input entirely
     engine.process_key(&press_key(Keysym::ESCAPE));
-    assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.live.text, "愛");
+    assert!(matches!(engine.state(), InputState::Empty));
 }
 
 #[test]
@@ -271,53 +271,84 @@ fn test_ctrl_space_fullwidth_space_commit() {
     assert_eq!(commit_text, "あ\u{3000}");
 }
 
-// --- Disabled Ctrl+Shift+L shortcut tests ---
+// --- Ctrl+Shift+L live conversion toggle tests ---
 
 #[test]
-fn test_ctrl_shift_l_is_not_consumed() {
+fn test_ctrl_shift_l_toggles_live_conversion() {
     let mut engine = InputMethodEngine::new();
     assert!(!engine.live.enabled);
 
-    // Ctrl+Shift+L is no longer an IME shortcut.
+    // Ctrl+Shift+L → toggle ON
     let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L_UPPER));
+    assert!(result.consumed);
+    assert!(engine.live.enabled);
+
+    // Ctrl+Shift+L again → toggle OFF
+    let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L_UPPER));
+    assert!(result.consumed);
     assert!(!engine.live.enabled);
-    assert!(!result.consumed);
 }
 
 #[test]
-fn test_ctrl_shift_l_lowercase_is_not_consumed() {
+fn test_ctrl_shift_l_lowercase_toggles() {
     let mut engine = InputMethodEngine::new();
     assert!(!engine.live.enabled);
 
-    // Ctrl+Shift+l (lowercase keysym) is not an IME shortcut.
+    // Ctrl+Shift+l (lowercase keysym) → toggle ON
     let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L));
-    assert!(!result.consumed);
-    assert!(!engine.live.enabled);
+    assert!(result.consumed);
+    assert!(engine.live.enabled);
 }
 
 #[test]
-fn test_ctrl_shift_l_during_composing_is_not_consumed() {
+fn test_toggle_on_during_composing_applies_immediately() {
+    // Toggling live conversion ON while composing should immediately attempt
+    // live conversion against the current input buffer instead of waiting for
+    // another keystroke. With no model loaded, run_auto_suggest falls back to
+    // the reading itself (which equals input_buf.text), so live.text stays
+    // empty — but the preedit must still be refreshed in a single action set.
     let mut engine = InputMethodEngine::new();
     engine.process_key(&press('a'));
     engine.process_key(&press('i'));
     assert!(!engine.live.enabled);
 
     let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L_UPPER));
-    assert!(!result.consumed);
-    assert!(!engine.live.enabled);
+    assert!(result.consumed);
+    assert!(engine.live.enabled);
+
+    // The toggle must produce a preedit refresh, not only an aux update.
+    let has_preedit = result
+        .actions
+        .iter()
+        .any(|a| matches!(a, EngineAction::UpdatePreedit(_)));
+    assert!(
+        has_preedit,
+        "toggling ON during composing should refresh preedit immediately"
+    );
 }
 
 #[test]
-fn test_ctrl_shift_l_during_live_conversion_is_not_consumed() {
+fn test_toggle_off_during_composing_clears_live_text() {
+    // Toggling OFF while live conversion is showing should revert the preedit
+    // back to hiragana without requiring another keystroke.
     let mut engine = make_live_conversion_engine();
     engine.process_key(&press('a'));
     engine.process_key(&press('i'));
     engine.live.text = "愛".to_string();
 
     let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L_UPPER));
-    assert!(!result.consumed);
-    assert!(engine.live.enabled);
-    assert_eq!(engine.live.text, "愛");
+    assert!(result.consumed);
+    assert!(!engine.live.enabled);
+    assert!(engine.live.text.is_empty());
+
+    let preedit_text = result.actions.iter().find_map(|a| {
+        if let EngineAction::UpdatePreedit(p) = a {
+            Some(p.text().to_string())
+        } else {
+            None
+        }
+    });
+    assert_eq!(preedit_text.as_deref(), Some("あい"));
 }
 
 #[test]
@@ -332,13 +363,21 @@ fn test_engine_config_live_conversion_enabled() {
 }
 
 #[test]
-fn test_ctrl_shift_l_does_not_show_aux_text() {
+fn test_ctrl_shift_l_shows_aux_text() {
     let mut engine = InputMethodEngine::new();
 
+    // Ctrl+Shift+L → check aux text shows "ライブ変換: ON"
     let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L_UPPER));
     let has_aux = result
         .actions
         .iter()
-        .any(|a| matches!(a, EngineAction::UpdateAuxText(text) if text.contains("ライブ変換")));
-    assert!(!has_aux);
+        .any(|a| matches!(a, EngineAction::UpdateAuxText(text) if text.contains("ライブ変換: ON")));
+    assert!(has_aux);
+
+    // Ctrl+Shift+L again → "ライブ変換: OFF"
+    let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L_UPPER));
+    let has_aux = result.actions.iter().any(
+        |a| matches!(a, EngineAction::UpdateAuxText(text) if text.contains("ライブ変換: OFF")),
+    );
+    assert!(has_aux);
 }

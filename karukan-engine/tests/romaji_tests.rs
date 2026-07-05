@@ -577,29 +577,29 @@ fn test_youon_nya_series() {
 }
 
 #[test]
-fn test_repeated_consonants_stay_literal() {
+fn test_sokuon() {
     let mut conv = RomajiConverter::new();
 
-    // kk -> literal k + ko
+    // kk -> っk
     conv.reset();
     "kko".chars().for_each(|c| {
         conv.push(c);
     });
-    assert_eq!(conv.output(), "kこ");
+    assert_eq!(conv.output(), "っこ");
 
-    // tt -> literal t + te
+    // tt -> っt
     conv.reset();
     "tte".chars().for_each(|c| {
         conv.push(c);
     });
-    assert_eq!(conv.output(), "tて");
+    assert_eq!(conv.output(), "って");
 
-    // pp -> literal p + pa
+    // pp -> っp
     conv.reset();
     "ppa".chars().for_each(|c| {
         conv.push(c);
     });
-    assert_eq!(conv.output(), "pぱ");
+    assert_eq!(conv.output(), "っぱ");
 }
 
 #[test]
@@ -680,7 +680,7 @@ fn test_real_words() {
     "gakkou".chars().for_each(|c| {
         conv.push(c);
     });
-    assert_eq!(conv.output(), "がkこう");
+    assert_eq!(conv.output(), "がっこう");
 
     conv.reset();
     "nihongo".chars().for_each(|c| {
@@ -692,7 +692,7 @@ fn test_real_words() {
     "kitte".chars().for_each(|c| {
         conv.push(c);
     });
-    assert_eq!(conv.output(), "きtて");
+    assert_eq!(conv.output(), "きって");
 
     // With IME-style nn rule: "annindouhu" -> あ + nn->ん + i->い + n before d->ん + douhu->どうふ
     conv.reset();
@@ -727,13 +727,13 @@ fn test_real_words() {
     assert_eq!(conv.output(), "かるかん"); // nn -> ん immediately
     assert_eq!(conv.buffer(), ""); // Buffer is empty
 
-    // Repeated consonants stay literal; explicit small-tsu still works.
+    // Test multiple input styles for same output
     conv.reset();
     "narezzi".chars().for_each(|c| {
         conv.push(c);
     });
     let result1 = conv.output().to_string();
-    assert_eq!(result1, "なれzじ");
+    assert_eq!(result1, "なれっじ");
 
     conv.reset();
     "nareltuzi".chars().for_each(|c| {
@@ -741,6 +741,9 @@ fn test_real_words() {
     });
     let result2 = conv.output().to_string();
     assert_eq!(result2, "なれっじ");
+
+    // Both should produce the same output
+    assert_eq!(result1, result2);
 }
 
 #[test]

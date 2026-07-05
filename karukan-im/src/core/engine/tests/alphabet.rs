@@ -174,6 +174,22 @@ fn test_alphabet_mode_uppercase_with_shift() {
 }
 
 #[test]
+fn test_alphabet_mode_backspace_to_empty_returns_to_hiragana() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press_shift('A'));
+    assert_eq!(engine.input_mode, InputMode::Alphabet);
+    assert_eq!(engine.preedit().unwrap().text(), "A");
+
+    engine.process_key(&press_key(Keysym::BACKSPACE));
+    assert!(matches!(engine.state(), InputState::Empty));
+    assert_eq!(engine.input_mode, InputMode::Hiragana);
+
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "あ");
+}
+
+#[test]
 fn test_alphabet_mode_direct_input() {
     let mut engine = InputMethodEngine::new();
 
@@ -228,7 +244,7 @@ fn test_mixed_hiragana_alphabet_input() {
 }
 
 #[test]
-fn test_alphabet_mode_returns_to_hiragana_after_commit() {
+fn test_alphabet_mode_persists_across_commit() {
     let mut engine = InputMethodEngine::new();
 
     // Enter alphabet mode via Shift+H
@@ -240,17 +256,16 @@ fn test_alphabet_mode_returns_to_hiragana_after_commit() {
     engine.process_key(&press_key(Keysym::RETURN));
     assert!(matches!(engine.state(), InputState::Empty));
 
-    // Enter commit returns to hiragana mode.
-    assert!(engine.input_mode == InputMode::Hiragana);
+    // alphabet_mode should persist
+    assert!(engine.input_mode == InputMode::Alphabet);
 
-    // New input should be romaji-converted again.
+    // New input should still be in alphabet mode
     engine.process_key(&press('y'));
-    engine.process_key(&press('a'));
-    assert_eq!(engine.preedit().unwrap().text(), "や");
+    assert_eq!(engine.preedit().unwrap().text(), "y");
 }
 
 #[test]
-fn test_alphabet_mode_escape_is_noop() {
+fn test_alphabet_mode_cancel_clears_flags() {
     let mut engine = InputMethodEngine::new();
 
     // Enter alphabet mode via Shift+A, type, cancel
@@ -258,26 +273,9 @@ fn test_alphabet_mode_escape_is_noop() {
     engine.process_key(&press('b'));
 
     engine.process_key(&press_key(Keysym::ESCAPE));
-    assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.preedit().unwrap().text(), "Ab");
-    // Mode persists because Escape no longer cancels composing input.
-    assert!(engine.input_mode == InputMode::Alphabet);
-}
-
-#[test]
-fn test_alphabet_mode_backspace_to_empty_returns_to_hiragana() {
-    let mut engine = InputMethodEngine::new();
-
-    engine.process_key(&press_shift('A'));
-    assert_eq!(engine.input_mode, InputMode::Alphabet);
-    assert_eq!(engine.preedit().unwrap().text(), "A");
-
-    engine.process_key(&press_key(Keysym::BACKSPACE));
     assert!(matches!(engine.state(), InputState::Empty));
-    assert_eq!(engine.input_mode, InputMode::Hiragana);
-
-    engine.process_key(&press('a'));
-    assert_eq!(engine.preedit().unwrap().text(), "あ");
+    // Mode persists even after cancel
+    assert!(engine.input_mode == InputMode::Alphabet);
 }
 
 #[test]
@@ -289,7 +287,7 @@ fn test_alphabet_mode_aux_text() {
     let aux_hiragana = engine.format_aux_composing();
     assert!(aux_hiragana.starts_with("[あ]"));
 
-    engine.reset();
+    engine.process_key(&press_key(Keysym::ESCAPE));
 
     // Enter alphabet mode via Shift+A
     engine.process_key(&press_shift('A'));

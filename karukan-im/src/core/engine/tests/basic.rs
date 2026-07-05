@@ -24,17 +24,6 @@ fn test_engine_romaji_to_hiragana() {
 }
 
 #[test]
-fn repeated_consonants_stay_literal_in_kana_mode() {
-    let mut engine = InputMethodEngine::new();
-
-    for ch in "kka".chars() {
-        engine.process_key(&press(ch));
-    }
-
-    assert_eq!(engine.preedit().unwrap().text(), "kか");
-}
-
-#[test]
 fn test_engine_commit_composing() {
     let mut engine = InputMethodEngine::new();
 
@@ -70,9 +59,11 @@ fn test_engine_backspace() {
 }
 
 #[test]
-fn space_in_empty_hiragana_commits_halfwidth_space() {
-    // Bare Space from Empty in Hiragana mode commits a half-width ASCII space.
-    // Full-width space is available only via Ctrl+Space.
+fn space_in_empty_hiragana_commits_fullwidth_space() {
+    // Bare Space from Empty in Hiragana mode commits a full-width `　`
+    // directly without entering Composing — the Japanese-IME
+    // convention, but without the side effect of "second Space starts
+    // Conversion mode" that a Composing-state insertion would cause.
     let mut engine = InputMethodEngine::new();
     assert_eq!(engine.input_mode, InputMode::Hiragana);
 
@@ -83,11 +74,11 @@ fn space_in_empty_hiragana_commits_halfwidth_space() {
         EngineAction::Commit(t) => Some(t.clone()),
         _ => None,
     });
-    assert_eq!(committed.as_deref(), Some(" "));
+    assert_eq!(committed.as_deref(), Some("\u{3000}"));
 }
 
 #[test]
-fn double_space_in_empty_hiragana_commits_two_halfwidth_spaces() {
+fn double_space_in_empty_hiragana_commits_two_fullwidth_spaces() {
     // Regression for the conversion-mode-on-second-Space issue: two
     // consecutive Spaces from Empty must produce two committed `　`s,
     // never enter Composing, and never trigger Conversion.
@@ -99,7 +90,7 @@ fn double_space_in_empty_hiragana_commits_two_halfwidth_spaces() {
             EngineAction::Commit(t) => Some(t.clone()),
             _ => None,
         });
-        assert_eq!(committed.as_deref(), Some(" "));
+        assert_eq!(committed.as_deref(), Some("\u{3000}"));
     }
 }
 
@@ -150,16 +141,14 @@ fn space_after_composing_starts_still_triggers_conversion() {
 }
 
 #[test]
-fn test_engine_escape_does_not_cancel_composing() {
+fn test_engine_cancel() {
     let mut engine = InputMethodEngine::new();
 
     engine.process_key(&press('a'));
     engine.process_key(&press('i'));
 
-    let result = engine.process_key(&press_key(Keysym::ESCAPE));
-    assert!(!result.consumed);
-    assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.preedit().unwrap().text(), "あい");
+    engine.process_key(&press_key(Keysym::ESCAPE));
+    assert!(matches!(engine.state(), InputState::Empty));
 }
 
 #[test]
