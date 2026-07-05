@@ -2,6 +2,12 @@
 
 use super::*;
 
+enum ComposingCommitForm {
+    Hiragana,
+    FullKatakana,
+    HalfKatakana,
+}
+
 /// Append candidates to `target`, skipping duplicates by text.
 fn append_candidates_dedup(target: &mut Vec<Candidate>, source: Vec<Candidate>) {
     for c in source {
@@ -56,16 +62,16 @@ impl InputMethodEngine {
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
             append_candidates_dedup(&mut all_candidates, self.lookup_rewriter_variants(&reading));
             if all_candidates.is_empty() {
+                self.clear_composing_candidates();
                 return EngineResult::consumed()
                     .with_action(EngineAction::UpdatePreedit(preedit))
                     .with_action(EngineAction::HideCandidates)
                     .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
             }
+            let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(preedit))
-                .with_action(EngineAction::ShowCandidates(CandidateList::new(
-                    all_candidates,
-                )))
+                .with_action(EngineAction::ShowCandidates(candidate_list))
                 .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
         };
 
@@ -87,11 +93,10 @@ impl InputMethodEngine {
             append_candidates_dedup(&mut all_candidates, model_candidates);
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
             let aux = self.format_aux_suggest(&self.input_buf.text.clone());
+            let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(preedit))
-                .with_action(EngineAction::ShowCandidates(CandidateList::new(
-                    all_candidates,
-                )))
+                .with_action(EngineAction::ShowCandidates(candidate_list))
                 .with_action(EngineAction::UpdateAuxText(aux));
         }
 
@@ -109,11 +114,10 @@ impl InputMethodEngine {
         // Then dictionary candidates
         append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
         let aux = self.format_aux_suggest(&self.input_buf.text.clone());
+        let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
-            .with_action(EngineAction::ShowCandidates(CandidateList::new(
-                all_candidates,
-            )))
+            .with_action(EngineAction::ShowCandidates(candidate_list))
             .with_action(EngineAction::UpdateAuxText(aux))
     }
 
@@ -130,24 +134,11 @@ impl InputMethodEngine {
                 .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
         }
 
-        // Bare Space from Empty state:
-        //
-        // * Hiragana mode → commit a full-width `　` directly, matching
-        //   the Japanese-IME convention. We deliberately do NOT enter
-        //   Composing here: if we did, the next Space the user typed
-        //   would be interpreted by `process_key_composing` as the
-        //   conversion trigger and an unwanted candidate window would
-        //   appear after two spaces in a row.
-        // * Any other mode → return `not_consumed` so the OS delivers
-        //   a normal half-width ASCII space to the application. The
-        //   user is either typing ASCII (Alphabet) or in an edge mode
-        //   (Katakana / Emoji) where injecting `　` would be wrong.
-        //
-        // The full-width space gesture from Empty in any mode is
-        // `Ctrl+Space` (above), which seeds a Composing session.
+        // Bare Space from Empty state commits a half-width ASCII space in
+        // Hiragana. Full-width space is reserved for Ctrl+Space.
         if key.keysym == Keysym::SPACE && !key.modifiers.control_key && !key.modifiers.alt_key {
             return if self.input_mode == InputMode::Hiragana {
-                EngineResult::consumed().with_action(EngineAction::Commit("\u{3000}".to_string()))
+                EngineResult::consumed().with_action(EngineAction::Commit(" ".to_string()))
             } else {
                 EngineResult::not_consumed()
             };
@@ -258,8 +249,6 @@ impl InputMethodEngine {
             match key.keysym {
                 // Ctrl+Space: insert full-width space (U+3000)
                 Keysym::SPACE => return self.input_fullwidth_space(),
-                // Ctrl+K: enter katakana mode
-                Keysym::KEY_K | Keysym::KEY_K_UPPER => return self.enter_katakana_mode(),
                 // Ctrl+A: move to beginning (Emacs-style Home)
                 Keysym::KEY_A | Keysym::KEY_A_UPPER => return self.move_caret_home(),
                 // Ctrl+B: move left (Emacs-style Left)
@@ -274,15 +263,18 @@ impl InputMethodEngine {
 
         match key.keysym {
             Keysym::RETURN => self.commit_composing(),
-            Keysym::ESCAPE => self.cancel_composing(),
+            Keysym::ESCAPE => EngineResult::not_consumed(),
             Keysym::BACKSPACE => self.backspace_composing(),
             Keysym::DELETE => self.delete_composing(),
+            Keysym::F6 => self.commit_composing_as(ComposingCommitForm::Hiragana),
+            Keysym::F7 => self.commit_composing_as(ComposingCommitForm::FullKatakana),
+            Keysym::F8 => self.commit_composing_as(ComposingCommitForm::HalfKatakana),
             Keysym::SPACE if self.input_mode == InputMode::Alphabet => self.input_char(' '),
-            // Tab triggers conversion that bypasses the learning cache, so users
-            // can escape stale or unwanted learned entries (mozc binds Tab to a
-            // different conversion path — PredictAndConvert — in the same spirit).
-            Keysym::TAB => self.start_conversion(true),
-            Keysym::SPACE | Keysym::DOWN => self.start_conversion(false),
+            Keysym::TAB | Keysym::DOWN => self.select_next_composing_candidate(),
+            Keysym::UP if self.composing_candidate_selected => {
+                self.select_prev_composing_candidate()
+            }
+            Keysym::SPACE => self.start_conversion(false),
             Keysym::LEFT => self.move_caret_left(),
             Keysym::RIGHT => self.move_caret_right(),
             Keysym::HOME => self.move_caret_home(),
@@ -390,9 +382,137 @@ impl InputMethodEngine {
         self.refresh_input_state()
     }
 
+    /// Move through the auto-suggest candidates shown during Composing.
+    ///
+    /// The first Tab/Down only opts into the already-highlighted first
+    /// candidate. Subsequent presses advance through the list. This preserves
+    /// Enter's traditional behavior until the user explicitly starts selecting
+    /// suggestions.
+    fn select_next_composing_candidate(&mut self) -> EngineResult {
+        let Some(mut candidates) = self.composing_candidates.clone() else {
+            return EngineResult::not_consumed();
+        };
+        if candidates.is_empty() {
+            return EngineResult::not_consumed();
+        }
+        if self.composing_candidate_selected {
+            candidates.move_next();
+        } else {
+            self.composing_candidate_selected = true;
+        }
+        self.update_composing_candidate_selection(candidates)
+    }
+
+    fn select_prev_composing_candidate(&mut self) -> EngineResult {
+        let Some(mut candidates) = self.composing_candidates.clone() else {
+            return EngineResult::not_consumed();
+        };
+        if candidates.is_empty() {
+            return EngineResult::not_consumed();
+        }
+        candidates.move_prev();
+        self.composing_candidate_selected = true;
+        self.update_composing_candidate_selection(candidates)
+    }
+
+    fn update_composing_candidate_selection(&mut self, candidates: CandidateList) -> EngineResult {
+        let selected_text = candidates.selected_text().unwrap_or("").to_string();
+        self.composing_candidates = Some(candidates.clone());
+
+        let mut preedit = Preedit::with_text(&selected_text);
+        preedit.set_attributes(vec![PreeditAttribute::new(
+            0,
+            selected_text.chars().count(),
+            AttributeType::Highlight,
+        )]);
+        if let Some(p) = self.state.preedit_mut() {
+            *p = preedit.clone();
+        }
+
+        let reading = candidates
+            .selected()
+            .and_then(|c| c.reading.as_deref())
+            .unwrap_or(&self.input_buf.text)
+            .to_string();
+
+        EngineResult::consumed()
+            .with_action(EngineAction::UpdatePreedit(preedit))
+            .with_action(EngineAction::ShowCandidates(candidates))
+            .with_action(EngineAction::UpdateAuxText(
+                self.format_aux_conversion_with_page(&reading, self.composing_candidates.as_ref()),
+            ))
+    }
+
+    fn commit_selected_composing_candidate(&mut self) -> Option<EngineResult> {
+        if !self.composing_candidate_selected {
+            return None;
+        }
+        let candidates = self.composing_candidates.as_ref()?;
+        let text = candidates.selected_text()?.to_string();
+        let reading = candidates
+            .selected()
+            .and_then(|c| c.reading.clone())
+            .unwrap_or_else(|| self.input_buf.text.clone());
+        if !text.is_empty() && self.input_mode != InputMode::Emoji {
+            self.record_learning(&reading, &text);
+        }
+
+        self.converters.romaji.reset();
+        self.input_buf.clear();
+        self.live.text.clear();
+        self.clear_composing_candidates();
+        self.chunks.clear();
+        self.state = InputState::Empty;
+        self.exit_emoji_mode();
+        if self.input_mode == InputMode::Alphabet {
+            self.input_mode = InputMode::Hiragana;
+        }
+
+        Some(
+            EngineResult::consumed()
+                .with_action(EngineAction::UpdatePreedit(Preedit::new()))
+                .with_action(EngineAction::Commit(text))
+                .with_action(EngineAction::HideCandidates)
+                .with_action(EngineAction::HideAuxText),
+        )
+    }
+
+    fn commit_composing_as(&mut self, form: ComposingCommitForm) -> EngineResult {
+        self.flush_romaji_to_composed();
+        let reading = self.input_buf.text.clone();
+        let text = match form {
+            ComposingCommitForm::Hiragana => karukan_engine::katakana_to_hiragana(&reading),
+            ComposingCommitForm::FullKatakana => karukan_engine::hiragana_to_katakana(&reading),
+            ComposingCommitForm::HalfKatakana => {
+                karukan_engine::hiragana_to_half_katakana(&reading)
+            }
+        };
+
+        self.converters.romaji.reset();
+        self.input_buf.clear();
+        self.live.text.clear();
+        self.clear_composing_candidates();
+        self.chunks.clear();
+        self.state = InputState::Empty;
+        self.exit_emoji_mode();
+        if self.input_mode == InputMode::Alphabet {
+            self.input_mode = InputMode::Hiragana;
+        }
+
+        EngineResult::consumed()
+            .with_action(EngineAction::UpdatePreedit(Preedit::new()))
+            .with_action(EngineAction::Commit(text))
+            .with_action(EngineAction::HideCandidates)
+            .with_action(EngineAction::HideAuxText)
+    }
+
     /// Commit the current hiragana input (or katakana if in katakana mode)
     /// In live conversion mode, commits the converted text instead of hiragana.
     pub(super) fn commit_composing(&mut self) -> EngineResult {
+        if let Some(result) = self.commit_selected_composing_candidate() {
+            return result;
+        }
+
         // Flush any pending romaji into composed_hiragana
         self.flush_romaji_to_composed();
 
@@ -418,6 +538,7 @@ impl InputMethodEngine {
             self.state = InputState::Empty;
             self.input_buf.clear();
             self.live.text.clear();
+            self.clear_composing_candidates();
             self.chunks.clear();
             return EngineResult::consumed()
                 .with_action(EngineAction::HideCandidates)
@@ -435,9 +556,13 @@ impl InputMethodEngine {
         self.converters.romaji.reset();
         self.input_buf.clear();
         self.live.text.clear();
+        self.clear_composing_candidates();
         self.chunks.clear();
         self.state = InputState::Empty;
         self.exit_emoji_mode();
+        if self.input_mode == InputMode::Alphabet {
+            self.input_mode = InputMode::Hiragana;
+        }
 
         // HideCandidates is required here: the auto-suggest/live-conversion
         // window may be open while Composing, and the macOS frontend's
@@ -448,52 +573,5 @@ impl InputMethodEngine {
             .with_action(EngineAction::Commit(text))
             .with_action(EngineAction::HideCandidates)
             .with_action(EngineAction::HideAuxText)
-    }
-
-    /// Cancel the current input
-    /// In live conversion mode: first Escape clears live conversion and shows hiragana,
-    /// second Escape cancels input entirely.
-    pub(super) fn cancel_composing(&mut self) -> EngineResult {
-        // If live conversion is active, first Escape returns to hiragana display
-        if !self.live.text.is_empty() {
-            self.live.text.clear();
-            let preedit = self.set_composing_state();
-            return EngineResult::consumed()
-                .with_action(EngineAction::UpdatePreedit(preedit))
-                .with_action(EngineAction::HideCandidates)
-                .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
-        }
-
-        // Emoji mode: Escape closes the picker but commits the literal
-        // buffer (the typed `:smile` or `:xyz`) — Slack-style escape.
-        // The user is saying "abandon the emoji lookup but keep what I
-        // typed as plain text". Without this, Escape would silently
-        // discard the typed characters which is surprising when the
-        // user just wanted to dismiss the candidate list.
-        let emoji_literal =
-            if self.input_mode == InputMode::Emoji && !self.input_buf.text.is_empty() {
-                Some(self.input_buf.text.clone())
-            } else {
-                None
-            };
-
-        self.converters.romaji.reset();
-        self.input_buf.clear();
-        self.live.text.clear();
-        self.chunks.clear();
-        self.state = InputState::Empty;
-        // Emoji mode is per-session: leaving it returns the user to
-        // whatever mode they were in before typing `:` so their next
-        // word doesn't unexpectedly stay in ASCII-passthrough mode.
-        self.exit_emoji_mode();
-
-        let mut result = EngineResult::consumed()
-            .with_action(EngineAction::UpdatePreedit(Preedit::new()))
-            .with_action(EngineAction::HideCandidates)
-            .with_action(EngineAction::HideAuxText);
-        if let Some(literal) = emoji_literal {
-            result = result.with_action(EngineAction::Commit(literal));
-        }
-        result
     }
 }

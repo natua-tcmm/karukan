@@ -172,15 +172,16 @@ impl InputMethodEngine {
 
     /// Start kanji conversion for the current input buffer.
     ///
-    /// Called when DOWN/TAB/SPACE is pressed: flushes any pending romaji,
+    /// Called when Space is pressed: flushes any pending romaji,
     /// resolves the reading, runs `build_conversion_candidates`, and
     /// transitions into the Conversion state. The previous live-conversion
     /// result is preserved as the first model candidate so the user sees
     /// the same text they had been looking at during input.
     ///
-    /// `skip_learning` is set by the Tab path to omit learning-cache
-    /// candidates (Space/Down keep the default learning-included behavior).
+    /// `skip_learning` remains available for internal/tests that need to inspect
+    /// the learning-free branch; the normal key path keeps learning included.
     pub(super) fn start_conversion(&mut self, skip_learning: bool) -> EngineResult {
+        self.clear_composing_candidates();
         // Flush any remaining romaji into composed_hiragana
         self.flush_romaji_to_composed();
 
@@ -329,9 +330,8 @@ impl InputMethodEngine {
     ///
     /// Priority: Learning → User Dictionary → Model → System Dictionary → Fallback
     ///
-    /// `skip_learning` suppresses the learning-cache step (1). Used by the Tab
-    /// key path so users can escape a noisy learning history without losing
-    /// access to dictionary/model candidates.
+    /// `skip_learning` suppresses the learning-cache step (1). Normal key input
+    /// keeps this false; tests can still exercise the learning-free branch.
     pub(super) fn build_conversion_candidates(
         &mut self,
         reading: &str,
@@ -651,6 +651,7 @@ impl InputMethodEngine {
 
         self.state = InputState::Empty;
         self.input_buf.text.clear();
+        self.clear_composing_candidates();
         self.exit_emoji_mode();
 
         EngineResult::consumed()
@@ -674,6 +675,7 @@ impl InputMethodEngine {
 
         self.state = InputState::Empty;
         self.input_buf.text.clear();
+        self.clear_composing_candidates();
         self.exit_emoji_mode();
 
         // Start new input with the character
@@ -697,6 +699,7 @@ impl InputMethodEngine {
         if reading.is_empty() {
             self.state = InputState::Empty;
             self.input_buf.clear();
+            self.clear_composing_candidates();
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(Preedit::new()))
                 .with_action(EngineAction::HideCandidates)
@@ -791,6 +794,7 @@ impl InputMethodEngine {
         // Commit immediately after digit selection
 
         self.state = InputState::Empty;
+        self.clear_composing_candidates();
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))
