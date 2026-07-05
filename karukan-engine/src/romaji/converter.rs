@@ -103,13 +103,9 @@ impl RomajiConverter {
                 return self.convert_with_remainder("ん".to_string());
             }
 
-            // Double consonant rule: same consonant twice (except 'n') -> っ + consonant
-            if last == second_last && !matches!(last, 'a' | 'i' | 'u' | 'e' | 'o' | 'n') {
-                // Convert to sokuon and keep the last consonant
-                self.buffer = last.to_string();
-                self.output.push('っ');
-                return ConversionEvent::Converted("っ".to_string());
-            }
+            // Repeated consonants are intentionally left literal instead of
+            // becoming sokuon (`っ`). Users can still type small-tsu explicitly
+            // with xtu/ltsu.
         }
 
         // Search for longest match
@@ -288,15 +284,15 @@ mod tests {
     }
 
     #[test]
-    fn test_sokuon() {
+    fn test_repeated_consonants_stay_literal() {
         let mut conv = RomajiConverter::new();
         conv.push('k');
         conv.push('k');
-        assert_eq!(conv.output(), "っ");
+        assert_eq!(conv.output(), "k");
         assert_eq!(conv.buffer(), "k");
 
         conv.push('a');
-        assert_eq!(conv.output(), "っか");
+        assert_eq!(conv.output(), "kか");
         assert_eq!(conv.buffer(), "");
     }
 

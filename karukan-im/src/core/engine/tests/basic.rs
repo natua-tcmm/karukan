@@ -24,6 +24,17 @@ fn test_engine_romaji_to_hiragana() {
 }
 
 #[test]
+fn repeated_consonants_stay_literal_in_kana_mode() {
+    let mut engine = InputMethodEngine::new();
+
+    for ch in "kka".chars() {
+        engine.process_key(&press(ch));
+    }
+
+    assert_eq!(engine.preedit().unwrap().text(), "kか");
+}
+
+#[test]
 fn test_engine_commit_composing() {
     let mut engine = InputMethodEngine::new();
 

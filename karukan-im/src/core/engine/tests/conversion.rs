@@ -45,6 +45,19 @@ fn test_conversion_char_commits_and_continues_romaji() {
 }
 
 #[test]
+fn escape_is_noop_in_conversion_mode() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+
+    let result = engine.process_key(&press_key(Keysym::ESCAPE));
+    assert!(!result.consumed);
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+}
+
+#[test]
 fn test_alphabet_mode_space_inserts_literal_space() {
     let mut engine = InputMethodEngine::new();
 
