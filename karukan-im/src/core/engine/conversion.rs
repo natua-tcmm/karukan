@@ -577,7 +577,7 @@ impl InputMethodEngine {
     pub(super) fn process_key_conversion(&mut self, key: &KeyEvent) -> EngineResult {
         match key.keysym {
             Keysym::RETURN => self.commit_conversion(),
-            Keysym::ESCAPE => EngineResult::not_consumed(),
+            Keysym::ESCAPE => self.cancel_conversion(),
             Keysym::SPACE | Keysym::DOWN | Keysym::TAB => self.next_candidate(),
             Keysym::UP => self.prev_candidate(),
             Keysym::PAGE_DOWN => self.next_candidate_page(),

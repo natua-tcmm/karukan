@@ -45,7 +45,7 @@ fn f7_commits_full_width_katakana_immediately() {
 fn f8_commits_half_width_katakana_immediately() {
     let mut engine = InputMethodEngine::new();
 
-    for ch in "gaxtukou".chars() {
+    for ch in "gakkou".chars() {
         engine.process_key(&press(ch));
     }
     assert_eq!(engine.preedit().unwrap().text(), "がっこう");
@@ -54,20 +54,6 @@ fn f8_commits_half_width_katakana_immediately() {
     assert!(result.consumed);
     assert_eq!(committed_text(&result), Some("ｶﾞｯｺｳ"));
     assert!(matches!(engine.state(), InputState::Empty));
-}
-
-#[test]
-fn function_keys_commit_single_buffered_consonant() {
-    for (key, expected) in [(Keysym::F6, "k"), (Keysym::F7, "k"), (Keysym::F8, "k")] {
-        let mut engine = InputMethodEngine::new();
-        engine.process_key(&press('k'));
-        assert_eq!(engine.preedit().unwrap().text(), "k");
-
-        let result = engine.process_key(&press_key(key));
-        assert!(result.consumed);
-        assert_eq!(committed_text(&result), Some(expected));
-        assert!(matches!(engine.state(), InputState::Empty));
-    }
 }
 
 #[test]

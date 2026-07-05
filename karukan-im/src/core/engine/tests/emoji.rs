@@ -78,7 +78,7 @@ fn emoji_mode_shows_candidates_via_rewriter() {
 
 #[test]
 fn escape_is_noop_in_emoji_composing_mode() {
-    // Escape is disabled in the IME. While composing an emoji
+    // Escape is only a conversion-mode cancel key. While composing an emoji
     // shortcode it passes through and leaves the typed text/mode untouched.
     let mut engine = InputMethodEngine::new();
     engine.process_key(&press_colon());

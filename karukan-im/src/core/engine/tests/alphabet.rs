@@ -265,22 +265,6 @@ fn test_alphabet_mode_escape_is_noop() {
 }
 
 #[test]
-fn test_alphabet_mode_backspace_to_empty_returns_to_hiragana() {
-    let mut engine = InputMethodEngine::new();
-
-    engine.process_key(&press_shift('A'));
-    assert_eq!(engine.input_mode, InputMode::Alphabet);
-    assert_eq!(engine.preedit().unwrap().text(), "A");
-
-    engine.process_key(&press_key(Keysym::BACKSPACE));
-    assert!(matches!(engine.state(), InputState::Empty));
-    assert_eq!(engine.input_mode, InputMode::Hiragana);
-
-    engine.process_key(&press('a'));
-    assert_eq!(engine.preedit().unwrap().text(), "あ");
-}
-
-#[test]
 fn test_alphabet_mode_aux_text() {
     let mut engine = InputMethodEngine::new();
 

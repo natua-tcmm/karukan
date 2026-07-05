@@ -30,7 +30,7 @@ fn test_live_conversion_off_unchanged() {
 
 #[test]
 fn test_live_conversion_escape_is_noop_in_composing() {
-    // Escape is disabled in the IME; during composing it
+    // Escape is reserved for conversion-mode cancel; during composing the IME
     // leaves the current input/live text untouched.
     let mut engine = make_live_conversion_engine();
 
