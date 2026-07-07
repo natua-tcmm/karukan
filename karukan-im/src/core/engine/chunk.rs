@@ -273,9 +273,7 @@ impl InputMethodEngine {
 
     /// The left context (lctx) a chunk is built with: the editor surrounding
     /// text `base` followed by the converted text of every preceding chunk,
-    /// truncated to the API context budget. Defined once so the context the
-    /// model is given at conversion time (`convert_new_chunk`) stays identical
-    /// to the one displayed in the aux text (`chunk_lctx`).
+    /// truncated to the API context budget.
     fn lctx_for(&self, base: &str, preceding_converted: &str) -> String {
         self.truncate_context(&format!("{base}{preceding_converted}"))
     }
@@ -284,6 +282,7 @@ impl InputMethodEngine {
     /// the converted text of every preceding chunk, truncated to the context
     /// budget. Derived on demand (the chunk doesn't store it) — it is just "the
     /// value of the chunks to the left".
+    #[cfg(test)]
     pub(super) fn chunk_lctx(&self, index: usize) -> String {
         let base = self.truncate_context_for_api();
         let preceding: String = self.chunks[..index.min(self.chunks.len())]

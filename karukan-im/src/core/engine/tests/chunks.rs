@@ -307,10 +307,7 @@ fn test_middle_delete_reconverts_only_touched_chunk() {
 }
 
 #[test]
-fn test_aux_text_lctx_is_current_chunk_lctx() {
-    // The aux line shows a single `lctx:` — the current chunk's actual left
-    // context (here the conversion of the first chunk) — not a separate
-    // per-chunk fragment on top of the editor surrounding context.
+fn test_aux_text_hides_chunk_lctx() {
     let mut engine = make_chunk_engine(2);
     engine.process_key(&press('a'));
     engine.process_key(&press('i'));
@@ -326,17 +323,9 @@ fn test_aux_text_lctx_is_current_chunk_lctx() {
         })
         .expect("aux text action");
 
-    let chunk_lctx = engine.chunk_lctx(engine.current_chunk_index());
-    assert!(!chunk_lctx.is_empty());
-    assert!(
-        aux.contains(&format!("lctx: {chunk_lctx}")),
-        "aux was: {aux}"
-    );
-    // No redundant separate chunk fragment.
-    assert!(
-        !aux.contains("chunk "),
-        "aux should have a single lctx: {aux}"
-    );
+    assert_eq!(aux, "[あ] あいうえ");
+    assert!(!aux.contains("lctx:"), "aux was: {aux}");
+    assert!(!aux.contains("ctx:"), "aux was: {aux}");
 }
 
 #[test]

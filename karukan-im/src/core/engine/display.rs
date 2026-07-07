@@ -60,71 +60,9 @@ impl InputMethodEngine {
         preedit
     }
 
-    /// Format an `lctx: … rctx: …` line from explicit left/right context
-    /// strings, each truncated to `display_context_len` (left keeps its tail,
-    /// right keeps its head). Empty when both are absent or the limit is 0.
-    fn context_line(&self, left: Option<&str>, right: Option<&str>) -> String {
-        let max_len = self.config.display_context_len;
-        if max_len == 0 {
-            return String::new();
-        }
-        let lctx = left.filter(|s| !s.is_empty()).map(|left| {
-            let char_count = left.chars().count();
-            if char_count > max_len {
-                let start = char_count - max_len;
-                format!("...{}", left.chars().skip(start).collect::<String>())
-            } else {
-                left.to_string()
-            }
-        });
-
-        let rctx = right.filter(|s| !s.is_empty()).map(|right| {
-            let char_count = right.chars().count();
-            if char_count > max_len {
-                format!("{}...", right.chars().take(max_len).collect::<String>())
-            } else {
-                right.to_string()
-            }
-        });
-
-        match (lctx, rctx) {
-            (Some(l), Some(r)) => format!("lctx: {} rctx: {}", l, r),
-            (Some(l), None) => format!("lctx: {}", l),
-            (None, Some(r)) => format!("rctx: {}", r),
-            (None, None) => String::new(),
-        }
-    }
-
-    /// Surrounding-text context line (editor left/right). Used by conversion-mode
-    /// aux text, where there is no live chunking.
-    pub(super) fn display_context(&self) -> String {
-        let ctx = self.surrounding_context.as_ref();
-        self.context_line(
-            ctx.and_then(|c| c.left.as_deref()),
-            ctx.and_then(|c| c.right.as_deref()),
-        )
-    }
-
-    /// Context line for live conversion (composing / auto-suggest). The single
-    /// `lctx:` shown is the *current chunk's* left context — the editor
-    /// surrounding text plus the converted text of the preceding chunks, derived
-    /// via `chunk_lctx` — so the model context that chunk uses is what gets
-    /// displayed, rather than a second redundant lctx. It already folds in the
-    /// editor surrounding left context (so an empty buffer shows it as-is). The
-    /// right side stays the editor surrounding right context.
-    pub(super) fn display_context_chunked(&self) -> String {
-        let lctx = self.chunk_lctx(self.current_chunk_index());
-        let left = (!lctx.is_empty()).then_some(lctx.as_str());
-        let right = self
-            .surrounding_context
-            .as_ref()
-            .and_then(|c| c.right.as_deref());
-        self.context_line(left, right)
-    }
-
     /// Get the current mode indicator string
     pub(super) fn mode_indicator(&self) -> String {
-        let base = match self.input_mode {
+        match self.input_mode {
             InputMode::Alphabet => "[A]",
             InputMode::Katakana => "[カ]",
             InputMode::Hiragana => "[あ]",
@@ -133,119 +71,48 @@ impl InputMethodEngine {
             // glyph in the aux text that's distinct from `[A]` so the
             // user sees they're not in plain alphabet input.
             InputMode::Emoji => "[☺]",
-        };
-        if self.live.enabled {
-            format!("⚡{}", base)
+        }
+        .to_string()
+    }
+
+    fn format_mode_and_reading(&self, indicator: &str, reading: &str) -> String {
+        if reading.is_empty() {
+            indicator.to_string()
         } else {
-            base.to_string()
+            format!("{} {}", indicator, reading)
+        }
+    }
+
+    fn reading_with_romaji_buffer(&self, reading: &str) -> String {
+        let romaji_buf = self.converters.romaji.buffer();
+        if romaji_buf.is_empty() {
+            reading.to_string()
+        } else {
+            format!("{}{}", reading, romaji_buf)
         }
     }
 
     /// Format aux text for composing input mode
     pub(super) fn format_aux_composing(&self) -> String {
-        let ctx = self.display_context_chunked();
-        let model = self.model_name();
         let indicator = self.mode_indicator();
-        // Show reading + unconverted romaji buffer (e.g. "わせだd")
-        let romaji_buf = self.converters.romaji.buffer();
-        let reading = if self.input_buf.text.is_empty() && romaji_buf.is_empty() {
-            String::new()
-        } else {
-            format!(" {}{}", self.input_buf.text, romaji_buf)
-        };
-        if ctx.is_empty() {
-            format!("{}{} Karukan ({})", indicator, reading, model)
-        } else {
-            format!("{}{} Karukan ({}) | {}", indicator, reading, model, ctx)
-        }
-    }
-
-    /// Get token count for a reading (returns None if converter not initialized)
-    pub(super) fn get_token_count(&self, reading: &str) -> Option<usize> {
-        self.converters
-            .kanji
-            .as_ref()
-            .and_then(|c| c.count_input_tokens(reading).ok())
-    }
-
-    /// Get the display name of the model used for the last conversion
-    /// Falls back to the static model name if no conversion has happened yet
-    fn last_used_model(&self) -> String {
-        if self.metrics.model_name.is_empty() {
-            self.model_name()
-        } else {
-            self.metrics.model_name.clone()
-        }
+        let reading = self.reading_with_romaji_buffer(&self.input_buf.text);
+        self.format_mode_and_reading(&indicator, &reading)
     }
 
     /// Format aux text for conversion mode
     pub(super) fn format_aux_conversion_with_page(
         &self,
         reading: &str,
-        candidates: Option<&CandidateList>,
+        _candidates: Option<&CandidateList>,
     ) -> String {
-        let ctx = self.display_context();
-        let timing = format!(
-            "{}ms/{}ms",
-            self.metrics.conversion_ms, self.metrics.process_key_ms
-        );
-        let model = self.last_used_model();
-        let tokens = self
-            .get_token_count(reading)
-            .map(|t| format!("{}tok", t))
-            .unwrap_or_default();
-        let page_info = candidates
-            .filter(|c| c.total_pages() > 1)
-            .map(|c| format!(" ({}/{})", c.current_page() + 1, c.total_pages()))
-            .unwrap_or_default();
-        let source_label = candidates
-            .and_then(|c| c.selected())
-            .and_then(|c| c.source_label.as_deref())
-            .filter(|a| !a.is_empty())
-            .map(|a| format!(" | {}", a))
-            .unwrap_or_default();
-        if ctx.is_empty() {
-            format!(
-                "[変換]{} {} | {} {} | {}{}",
-                page_info, reading, timing, tokens, model, source_label
-            )
-        } else {
-            format!(
-                "[変換]{} {} | {} | {} {} | {}{}",
-                page_info, reading, ctx, timing, tokens, model, source_label
-            )
-        }
+        self.format_mode_and_reading("[変換]", reading)
     }
 
     /// Format aux text for auto-suggest mode
-    /// Note: token count is not shown here to avoid performance overhead on every keystroke
-    /// Timing shows inference_ms/process_key_ms (process_key_ms is from previous keystroke)
     pub(super) fn format_aux_suggest(&self, reading: &str) -> String {
-        // Single context block: the lctx is the current chunk's actual left
-        // context (see `display_context_chunked`), so there is no separate
-        // per-chunk lctx fragment widening the candidate window.
-        let ctx = self.display_context_chunked();
-        let timing = format!(
-            "{}ms/{}ms",
-            self.metrics.conversion_ms, self.metrics.process_key_ms
-        );
-        let model = self.last_used_model();
         let indicator = self.mode_indicator();
-        // Append unconverted romaji buffer to reading (e.g. "わせだ" + "d" → "わせだd")
-        let romaji_buf = self.converters.romaji.buffer();
-        let display_reading = if romaji_buf.is_empty() {
-            reading.to_string()
-        } else {
-            format!("{}{}", reading, romaji_buf)
-        };
-        if ctx.is_empty() {
-            format!("{} {} | {} | {}", indicator, display_reading, timing, model)
-        } else {
-            format!(
-                "{} {} | ctx: {} | {} | {}",
-                indicator, display_reading, ctx, timing, model
-            )
-        }
+        let display_reading = self.reading_with_romaji_buffer(reading);
+        self.format_mode_and_reading(&indicator, &display_reading)
     }
 
     /// Truncate context to safe size for API calls

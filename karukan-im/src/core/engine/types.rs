@@ -60,6 +60,7 @@ pub(in crate::core) struct SurroundingContext {
     /// Text before the cursor (None if empty)
     pub left: Option<String>,
     /// Text after the cursor (None if empty)
+    #[allow(dead_code)]
     pub right: Option<String>,
 }
 
@@ -170,8 +171,7 @@ pub(crate) enum InputMode {
 ///
 /// The left context (lctx) a chunk was converted with is *not* stored: it is
 /// just the editor surrounding text plus the `converted` text of the preceding
-/// chunks, so it is derived on demand via `chunk_lctx` instead of duplicated
-/// here.
+/// chunks, so it is derived on demand in tests instead of duplicated here.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(in crate::core) struct ComposingChunk {
     /// Hiragana reading for this chunk (≤ N chars).

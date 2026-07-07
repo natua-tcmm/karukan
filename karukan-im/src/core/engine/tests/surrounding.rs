@@ -242,48 +242,16 @@ fn test_set_surrounding_context_truncation() {
 }
 
 #[test]
-fn test_display_context_lctx_rctx_format() {
+fn test_aux_text_hides_surrounding_context() {
     let mut engine = InputMethodEngine::new();
-    engine.config.display_context_len = 10;
-
-    // Both contexts
     engine.set_surrounding_context("左側", "右側");
-    let display = engine.display_context();
-    assert!(display.contains("lctx:"));
-    assert!(display.contains("rctx:"));
-    assert!(display.contains("左側"));
-    assert!(display.contains("右側"));
 
-    // Left only
-    engine.set_surrounding_context("左側のみ", "");
-    let display = engine.display_context();
-    assert!(display.contains("lctx:"));
-    assert!(!display.contains("rctx:"));
+    engine.process_key(&press('a'));
+    let aux = engine.format_aux_composing();
 
-    // Right only
-    engine.set_surrounding_context("", "右側のみ");
-    let display = engine.display_context();
-    assert!(!display.contains("lctx:"));
-    assert!(display.contains("rctx:"));
-
-    // Empty (both empty → None)
-    engine.set_surrounding_context("", "");
-    assert!(engine.surrounding_context.is_none());
-    let display = engine.display_context();
-    assert!(display.is_empty());
-}
-
-#[test]
-fn test_display_context_truncation() {
-    let mut engine = InputMethodEngine::new();
-    engine.config.max_api_context_len = 50;
-    engine.config.display_context_len = 5;
-
-    engine.set_surrounding_context("とても長い左側テキスト", "とても長い右側テキスト");
-
-    let ctx = engine.display_context();
-    // Left context: truncated with "..." prefix, right context: truncated with "..." suffix
-    assert!(ctx.contains("lctx: ..."));
-    assert!(ctx.contains("rctx: "));
-    assert!(ctx.ends_with("..."));
+    assert_eq!(aux, "[あ] あ");
+    assert!(!aux.contains("lctx:"), "aux was: {aux}");
+    assert!(!aux.contains("rctx:"), "aux was: {aux}");
+    assert!(!aux.contains("左側"), "aux was: {aux}");
+    assert!(!aux.contains("右側"), "aux was: {aux}");
 }
