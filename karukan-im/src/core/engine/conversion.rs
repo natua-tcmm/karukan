@@ -30,7 +30,7 @@ fn width_annotation(text: &str) -> Option<&'static str> {
 /// [`push_force`] always inserts (used for learning candidates that should
 /// appear at the top even if a later source re-emits the same text).
 struct CandidateBuilder {
-    candidates: Vec<AnnotatedCandidate>,
+    candidates: Vec<ConversionCandidate>,
     seen: HashSet<String>,
 }
 
@@ -43,25 +43,29 @@ impl CandidateBuilder {
     }
 
     /// Push a candidate if its text hasn't been seen yet.
-    fn push(&mut self, ac: AnnotatedCandidate) {
-        if self.seen.insert(ac.text.clone()) {
-            self.candidates.push(ac);
+    fn push(&mut self, candidate: ConversionCandidate) {
+        if self.seen.insert(candidate.text.clone()) {
+            self.candidates.push(candidate);
         }
     }
 
     /// Push a candidate unconditionally, marking its text as seen so later
     /// dedup'd inserts skip it. Use only for sources that should win over
     /// duplicates from later steps (e.g. learning cache).
-    fn push_force(&mut self, ac: AnnotatedCandidate) {
-        self.seen.insert(ac.text.clone());
-        self.candidates.push(ac);
+    fn push_force(&mut self, candidate: ConversionCandidate) {
+        self.seen.insert(candidate.text.clone());
+        self.candidates.push(candidate);
     }
 
     fn is_empty(&self) -> bool {
         self.candidates.is_empty()
     }
 
-    fn into_candidates(self) -> Vec<AnnotatedCandidate> {
+    fn into_candidates(mut self) -> Vec<ConversionCandidate> {
+        let count = self.candidates.len();
+        for (index, candidate) in self.candidates.iter_mut().enumerate() {
+            candidate.rank_score = Some((count - index) as f32);
+        }
         self.candidates
     }
 }
@@ -85,7 +89,7 @@ impl InputMethodEngine {
         reading: &str,
         api_context: &str,
         num_candidates: usize,
-    ) -> Vec<String> {
+    ) -> Vec<karukan_engine::ModelCandidate> {
         if !karukan_engine::contains_kana(reading) {
             return vec![];
         }
@@ -102,7 +106,7 @@ impl InputMethodEngine {
 
         let start = Instant::now();
         let candidates = converter
-            .convert(&katakana, api_context, candidate_count)
+            .convert_scored(&katakana, api_context, candidate_count)
             .unwrap_or_default();
 
         self.metrics.conversion_ms = start.elapsed().as_millis() as u64;
@@ -152,7 +156,7 @@ impl InputMethodEngine {
         {
             candidates.insert(
                 0,
-                AnnotatedCandidate::new(prev_suggest_text, CandidateSource::Model),
+                ConversionCandidate::new(prev_suggest_text, CandidateSource::Model),
             );
         }
 
@@ -166,7 +170,7 @@ impl InputMethodEngine {
             return EngineResult::consumed().with_action(EngineAction::UpdatePreedit(preedit));
         }
 
-        // Map AnnotatedCandidate → public Candidate. The two annotation
+        // Map ConversionCandidate → public Candidate. The two annotation
         // slots are kept disjoint so descriptions never duplicate between the
         // aux text and the candidate's right-side comment:
         //   - `source_label` ← source.label() only (e.g. `🤖 AI`, `📚 辞書`)
@@ -175,16 +179,7 @@ impl InputMethodEngine {
         let candidate_list = CandidateList::new(
             candidates
                 .into_iter()
-                .map(|ac| {
-                    let cand_reading = ac.reading.unwrap_or_else(|| reading.clone());
-                    let label = ac.source.label();
-                    Candidate {
-                        text: ac.text,
-                        reading: Some(cand_reading),
-                        source_label: (!label.is_empty()).then(|| label.to_string()),
-                        description: ac.description,
-                    }
-                })
+                .map(|candidate| candidate.into_ui_candidate(&reading))
                 .collect(),
         );
         self.enter_conversion_state(&reading, candidate_list)
@@ -219,7 +214,7 @@ impl InputMethodEngine {
     ///
     /// User dictionary results come first (higher priority), then system dictionary
     /// results sorted by score. Duplicates are removed via HashSet.
-    fn search_dictionaries(&self, reading: &str, limit: usize) -> Vec<AnnotatedCandidate> {
+    fn search_dictionaries(&self, reading: &str, limit: usize) -> Vec<ConversionCandidate> {
         let mut candidates = Vec::new();
         let mut seen = HashSet::new();
 
@@ -232,10 +227,13 @@ impl InputMethodEngine {
                     break;
                 }
                 if seen.insert(cand.surface.clone()) {
-                    candidates.push(AnnotatedCandidate::new(
-                        cand.surface.clone(),
-                        CandidateSource::UserDictionary,
-                    ));
+                    candidates.push(
+                        ConversionCandidate::new(
+                            cand.surface.clone(),
+                            CandidateSource::UserDictionary,
+                        )
+                        .with_raw_score(Some(cand.score)),
+                    );
                 }
             }
         }
@@ -251,10 +249,10 @@ impl InputMethodEngine {
                     break;
                 }
                 if seen.insert(cand.surface.clone()) {
-                    candidates.push(AnnotatedCandidate::new(
-                        cand.surface,
-                        CandidateSource::Dictionary,
-                    ));
+                    candidates.push(
+                        ConversionCandidate::new(cand.surface, CandidateSource::Dictionary)
+                            .with_raw_score(Some(cand.score)),
+                    );
                 }
             }
         }
@@ -277,7 +275,7 @@ impl InputMethodEngine {
         reading: &str,
         num_candidates: usize,
         skip_learning: bool,
-    ) -> Vec<AnnotatedCandidate> {
+    ) -> Vec<ConversionCandidate> {
         // Try to initialize the kanji converter, but don't bail out if it
         // fails — symbol-only inputs (e.g. `。。。`) don't need the model and
         // we still want to produce dictionary, rewriter, and fallback candidates.
@@ -305,7 +303,7 @@ impl InputMethodEngine {
                 // Exact matches have reading == input reading; use None to avoid redundancy
                 let cand_reading = c.reading.filter(|r| r != reading);
                 builder.push_force(
-                    AnnotatedCandidate::new(c.text, CandidateSource::Learning)
+                    ConversionCandidate::new(c.text, CandidateSource::Learning)
                         .with_reading(cand_reading),
                 );
             }
@@ -327,14 +325,17 @@ impl InputMethodEngine {
             // pinned to the top of the candidate list as a Fallback
             // and outrank the 😄 we surface in step 5/6.
             if builder.is_empty() && self.input_mode != InputMode::Emoji {
-                builder.push(AnnotatedCandidate::new(
+                builder.push(ConversionCandidate::new(
                     hiragana.clone(),
                     CandidateSource::Fallback,
                 ));
             }
         } else {
-            for text in candidates {
-                builder.push(AnnotatedCandidate::new(text, CandidateSource::Model));
+            for candidate in candidates {
+                builder.push(
+                    ConversionCandidate::new(candidate.text, CandidateSource::Model)
+                        .with_raw_score(candidate.score),
+                );
             }
         }
 
@@ -363,13 +364,19 @@ impl InputMethodEngine {
         if self.input_mode == InputMode::Emoji {
             for (variant, description) in rewriter_variants {
                 builder.push(
-                    AnnotatedCandidate::new(variant, CandidateSource::Rewriter)
+                    ConversionCandidate::new(variant, CandidateSource::Rewriter)
                         .with_description(description),
                 );
             }
         } else {
-            builder.push(AnnotatedCandidate::new(hiragana, CandidateSource::Fallback));
-            builder.push(AnnotatedCandidate::new(katakana, CandidateSource::Fallback));
+            builder.push(ConversionCandidate::new(
+                hiragana,
+                CandidateSource::Fallback,
+            ));
+            builder.push(ConversionCandidate::new(
+                katakana,
+                CandidateSource::Fallback,
+            ));
             // Rewriters operate on the user's typed input (the reading
             // itself). Running them on dictionary/model/fallback
             // candidates produces unrelated noise (e.g. a dictionary
@@ -378,7 +385,7 @@ impl InputMethodEngine {
             // pulled by prefix lookup on `あ` would emit `ｱﾄ`).
             for (variant, description) in rewriter_variants {
                 builder.push(
-                    AnnotatedCandidate::new(variant, CandidateSource::Rewriter)
+                    ConversionCandidate::new(variant, CandidateSource::Rewriter)
                         .with_description(description),
                 );
             }

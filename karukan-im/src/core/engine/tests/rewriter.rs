@@ -148,6 +148,25 @@ fn rewriter_does_not_expand_dictionary_candidates() {
 }
 
 #[test]
+fn internal_candidates_preserve_raw_and_rank_scores() {
+    let mut engine = composing_engine("てすと");
+    engine.dicts.user = Some(user_dict_with("てすと", "試験"));
+
+    let candidates = engine.build_conversion_candidates("てすと", 9, false);
+    let dictionary_candidate = candidates
+        .iter()
+        .find(|candidate| candidate.text == "試験")
+        .unwrap();
+
+    assert_eq!(dictionary_candidate.raw_score, Some(1.0));
+    assert!(
+        candidates
+            .windows(2)
+            .all(|pair| pair[0].rank_score > pair[1].rank_score)
+    );
+}
+
+#[test]
 fn rewriter_candidates_only_derive_from_user_input() {
     // Structural invariant: every Rewriter-source candidate must be a
     // rewrite of the typed reading. Guards against future regressions where

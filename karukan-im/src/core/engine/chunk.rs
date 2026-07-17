@@ -311,6 +311,7 @@ impl InputMethodEngine {
         self.run_kana_kanji_conversion(reading, lctx, 1)
             .into_iter()
             .next()
+            .map(|candidate| candidate.text)
             .unwrap_or_else(|| reading.to_string())
     }
 

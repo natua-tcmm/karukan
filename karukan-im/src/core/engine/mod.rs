@@ -31,7 +31,7 @@ use super::state::InputState;
 use crate::config::settings::Settings;
 
 /// Source of a conversion candidate
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CandidateSource {
     /// User dictionary lookup
     UserDictionary,
@@ -61,29 +61,33 @@ impl CandidateSource {
     }
 }
 
-/// A conversion candidate tagged with its source and an optional description.
-///
-/// Built up internally during candidate construction; later mapped onto the
-/// public `Candidate` (where `source.label()` becomes `source_label` and this
-/// `description` becomes `description`).
+/// Canonical candidate representation used inside the conversion pipeline.
 #[derive(Debug, Clone)]
-struct AnnotatedCandidate {
+struct ConversionCandidate {
     text: String,
     source: CandidateSource,
     /// Override reading (e.g. from prefix_lookup where the full reading differs from input)
     reading: Option<String>,
+    /// Score supplied by the originating subsystem. Its scale is source-specific.
+    #[allow(dead_code)]
+    raw_score: Option<f32>,
+    /// Normalized ranking score. Higher values rank first.
+    #[allow(dead_code)]
+    rank_score: Option<f32>,
     /// Per-candidate description (e.g. `三点リーダ` for `…`,
     /// `[全]英大文字` for `ＡＢＣ`). Surfaced as the mozc-style right-side
     /// comment on the candidate; never contains a source label.
     description: Option<String>,
 }
 
-impl AnnotatedCandidate {
+impl ConversionCandidate {
     fn new(text: impl Into<String>, source: CandidateSource) -> Self {
         Self {
             text: text.into(),
             source,
             reading: None,
+            raw_score: None,
+            rank_score: None,
             description: None,
         }
     }
@@ -93,9 +97,24 @@ impl AnnotatedCandidate {
         self
     }
 
+    fn with_raw_score(mut self, score: Option<f32>) -> Self {
+        self.raw_score = score;
+        self
+    }
+
     fn with_description(mut self, description: Option<String>) -> Self {
         self.description = description;
         self
+    }
+
+    fn into_ui_candidate(self, default_reading: &str) -> Candidate {
+        let label = self.source.label();
+        Candidate {
+            text: self.text,
+            reading: Some(self.reading.unwrap_or_else(|| default_reading.to_string())),
+            source_label: (!label.is_empty()).then(|| label.to_string()),
+            description: self.description,
+        }
     }
 }
 
