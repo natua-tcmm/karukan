@@ -766,6 +766,8 @@ impl InputMethodEngine {
         match key.keysym {
             Keysym::RETURN => self.commit_conversion(),
             Keysym::ESCAPE => self.cancel_conversion(),
+            Keysym::LEFT if key.modifiers.shift_key => self.resize_conversion_segment(false),
+            Keysym::RIGHT if key.modifiers.shift_key => self.resize_conversion_segment(true),
             Keysym::LEFT if !key.modifiers.shift_key => self.move_conversion_segment(false),
             Keysym::RIGHT if !key.modifiers.shift_key => self.move_conversion_segment(true),
             Keysym::SPACE | Keysym::DOWN | Keysym::TAB => self.next_candidate(),
@@ -811,6 +813,75 @@ impl InputMethodEngine {
             } else {
                 session.move_active_left();
             }
+            session.candidates().cloned().unwrap_or_default()
+        };
+        self.update_conversion_preedit(&candidates)
+    }
+
+    fn segment_candidate_list(&mut self, reading: &str) -> CandidateList {
+        CandidateList::new(
+            self.build_conversion_candidates(reading, MAX_SEGMENT_CANDIDATES, false)
+                .into_iter()
+                .map(|candidate| candidate.into_ui_candidate(reading))
+                .collect(),
+        )
+    }
+
+    /// Move the active segment's right boundary. Expanding steals the first
+    /// character from the next segment; shrinking gives its last character to
+    /// the next segment. Empty segments are never created.
+    fn resize_conversion_segment(&mut self, expand: bool) -> EngineResult {
+        let proposal = {
+            let InputState::Conversion { session } = &self.state else {
+                return EngineResult::not_consumed();
+            };
+            let index = session.active_segment;
+            if index + 1 >= session.segments.len() {
+                return EngineResult::consumed();
+            }
+            let left = &session.segments[index];
+            let right = &session.segments[index + 1];
+            let boundary = if expand {
+                if right.reading_range.len() <= 1 {
+                    return EngineResult::consumed();
+                }
+                left.reading_range.end + 1
+            } else {
+                if left.reading_range.len() <= 1 {
+                    return EngineResult::consumed();
+                }
+                left.reading_range.end - 1
+            };
+            (
+                index,
+                left.reading_range.start..boundary,
+                boundary..right.reading_range.end,
+                session.reading.chars().collect::<Vec<_>>(),
+            )
+        };
+
+        let (index, left_range, right_range, chars) = proposal;
+        let left_reading: String = chars[left_range.clone()].iter().collect();
+        let right_reading: String = chars[right_range.clone()].iter().collect();
+        let left_candidates = self.segment_candidate_list(&left_reading);
+        let right_candidates = self.segment_candidate_list(&right_reading);
+
+        let candidates = {
+            let InputState::Conversion { session } = &mut self.state else {
+                return EngineResult::not_consumed();
+            };
+            session.segments[index] = crate::core::state::ConversionSegment {
+                reading_range: left_range,
+                reading: left_reading,
+                candidates: left_candidates,
+            };
+            session.segments[index + 1] = crate::core::state::ConversionSegment {
+                reading_range: right_range,
+                reading: right_reading,
+                candidates: right_candidates,
+            };
+            debug_assert!(session.ranges_are_valid());
+            session.rebuild_preedit();
             session.candidates().cloned().unwrap_or_default()
         };
         self.update_conversion_preedit(&candidates)

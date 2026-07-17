@@ -62,6 +62,7 @@ impl ConversionSession {
             active_segment: 0,
             preedit: Preedit::new(),
         };
+        debug_assert!(session.ranges_are_valid());
         session.rebuild_preedit();
         session
     }
@@ -113,6 +114,29 @@ impl ConversionSession {
         self.active_segment += 1;
         self.rebuild_preedit();
         true
+    }
+
+    /// Every non-empty segment covers the original reading exactly once.
+    pub fn ranges_are_valid(&self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+        let reading_chars: Vec<char> = self.reading.chars().collect();
+        let mut expected_start = 0;
+        for segment in &self.segments {
+            if segment.reading_range.start != expected_start
+                || segment.reading_range.start >= segment.reading_range.end
+                || segment.reading_range.end > reading_chars.len()
+                || segment.reading
+                    != reading_chars[segment.reading_range.clone()]
+                        .iter()
+                        .collect::<String>()
+            {
+                return false;
+            }
+            expected_start = segment.reading_range.end;
+        }
+        expected_start == reading_chars.len()
     }
 
     pub fn rebuild_preedit(&mut self) {

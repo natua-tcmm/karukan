@@ -195,3 +195,52 @@ fn left_and_right_move_the_active_conversion_segment() {
     };
     assert_eq!(session.active_segment, 0);
 }
+
+#[test]
+fn shift_arrows_resize_only_the_active_and_next_segments() {
+    use crate::core::keycode::KeyModifiers;
+    use crate::core::state::{ConversionSegment, ConversionSession};
+
+    let segments = vec![
+        ConversionSegment {
+            reading_range: 0..8,
+            reading: "じっちゅうはっく".into(),
+            candidates: CandidateList::from_strings(["十中八九"]),
+        },
+        ConversionSegment {
+            reading_range: 8..11,
+            reading: "あたる".into(),
+            candidates: CandidateList::from_strings(["当たる"]),
+        },
+        ConversionSegment {
+            reading_range: 11..13,
+            reading: "かも".into(),
+            candidates: CandidateList::from_strings(["かも"]),
+        },
+    ];
+    let mut engine = InputMethodEngine::new();
+    engine.state = InputState::Conversion {
+        session: ConversionSession::segmented("じっちゅうはっくあたるかも".into(), segments),
+    };
+
+    let shift_right = KeyEvent::new(Keysym::RIGHT, KeyModifiers::new().with_shift(true), true);
+    engine.process_key(&shift_right);
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("conversion state expected");
+    };
+    assert_eq!(session.segments[0].reading, "じっちゅうはっくあ");
+    assert_eq!(session.segments[0].reading_range, 0..9);
+    assert_eq!(session.segments[1].reading, "たる");
+    assert_eq!(session.segments[1].reading_range, 9..11);
+    assert_eq!(session.segments[2].candidates.selected_text(), Some("かも"));
+    assert!(session.ranges_are_valid());
+
+    let shift_left = KeyEvent::new(Keysym::LEFT, KeyModifiers::new().with_shift(true), true);
+    engine.process_key(&shift_left);
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("conversion state expected");
+    };
+    assert_eq!(session.segments[0].reading, "じっちゅうはっく");
+    assert_eq!(session.segments[1].reading, "あたる");
+    assert!(session.ranges_are_valid());
+}
