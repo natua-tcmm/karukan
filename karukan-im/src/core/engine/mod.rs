@@ -27,7 +27,7 @@ use tracing::{debug, trace};
 
 use super::candidate::{Candidate, CandidateList};
 use super::keycode::{KeyEvent, Keysym};
-use super::preedit::{AttributeType, Preedit, PreeditAttribute, PreeditSegment};
+use super::preedit::{AttributeType, Preedit, PreeditAttribute};
 use super::state::InputState;
 use crate::config::settings::Settings;
 

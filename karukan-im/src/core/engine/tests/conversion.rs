@@ -104,3 +104,46 @@ fn dictionary_lattice_emits_multiple_candidates_for_multiple_segments() {
     assert!(texts.contains(&"東京驛"));
     assert!(candidates.len() <= 9);
 }
+
+#[test]
+fn best_lattice_path_initializes_conversion_segments() {
+    use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
+    use karukan_engine::{DictionaryCategory, DictionarySource};
+
+    let entry = |reading: &str, surface: &str| {
+        NormalizedDictionaryEntry::new(
+            reading,
+            surface,
+            0.0,
+            DictionarySource::Mozc,
+            DictionaryCategory::General,
+            None,
+        )
+        .unwrap()
+    };
+    let dictionary =
+        Dictionary::build_from_normalized([entry("とうきょう", "東京"), entry("えき", "駅")])
+            .unwrap();
+    let mut engine = InputMethodEngine::new();
+    engine.dicts.system = Some(dictionary);
+    let session = engine.build_initial_conversion_session(
+        "とうきょうえき",
+        CandidateList::from_strings_with_reading(["東京駅"], "とうきょうえき"),
+    );
+
+    assert_eq!(session.segments.len(), 2);
+    assert_eq!(session.segments[0].reading_range, 0..5);
+    assert_eq!(session.segments[0].selected_text(), "東京");
+    assert_eq!(session.segments[1].reading_range, 5..7);
+    assert_eq!(session.segments[1].selected_text(), "駅");
+    assert_eq!(session.preedit().text(), "東京駅");
+    assert_eq!(session.preedit().attributes().len(), 2);
+    assert_eq!(
+        session.preedit().attributes()[0].attr_type,
+        AttributeType::Highlight
+    );
+    assert_eq!(
+        session.preedit().attributes()[1].attr_type,
+        AttributeType::Underline
+    );
+}

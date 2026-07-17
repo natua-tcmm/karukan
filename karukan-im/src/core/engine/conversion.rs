@@ -186,33 +186,119 @@ impl InputMethodEngine {
                 .map(|candidate| candidate.into_ui_candidate(&reading))
                 .collect(),
         );
-        self.enter_conversion_state(&reading, candidate_list)
+        let session = self.build_initial_conversion_session(&reading, candidate_list);
+        self.enter_conversion_state(session)
     }
 
-    /// Transition to Conversion state with the given reading and candidate list.
+    pub(super) fn build_initial_conversion_session(
+        &mut self,
+        reading: &str,
+        full_candidates: CandidateList,
+    ) -> crate::core::state::ConversionSession {
+        #[derive(Debug)]
+        struct InitialSegment {
+            start: usize,
+            end: usize,
+            reading: String,
+            surface: String,
+            from_dictionary: bool,
+        }
+
+        let Some(path) = self.dictionary_lattice_paths(reading, 1).into_iter().next() else {
+            return crate::core::state::ConversionSession::single(
+                reading.to_string(),
+                full_candidates,
+            );
+        };
+        if !path.segments.iter().any(|segment| segment.source.is_some()) {
+            return crate::core::state::ConversionSession::single(
+                reading.to_string(),
+                full_candidates,
+            );
+        }
+
+        // Unknown fallback edges are one character wide in the lattice. Merge
+        // adjacent unknowns so an uncovered phrase remains one usable segment.
+        let mut initial = Vec::<InitialSegment>::new();
+        for segment in path.segments {
+            if segment.source.is_none()
+                && let Some(previous) = initial.last_mut()
+                && !previous.from_dictionary
+                && previous.end == segment.char_start
+            {
+                previous.end = segment.char_end;
+                previous.reading.push_str(&segment.reading);
+                previous.surface.push_str(&segment.surface);
+                continue;
+            }
+            initial.push(InitialSegment {
+                start: segment.char_start,
+                end: segment.char_end,
+                reading: segment.reading,
+                surface: segment.surface,
+                from_dictionary: segment.source.is_some(),
+            });
+        }
+        if initial.len() <= 1 {
+            return crate::core::state::ConversionSession::single(
+                reading.to_string(),
+                full_candidates,
+            );
+        }
+
+        let mut segments = Vec::new();
+        for initial in initial {
+            let mut candidates = CandidateList::new(
+                self.build_conversion_candidates(&initial.reading, MAX_SEGMENT_CANDIDATES, false)
+                    .into_iter()
+                    .map(|candidate| candidate.into_ui_candidate(&initial.reading))
+                    .collect(),
+            );
+            let preferred_index = candidates
+                .candidates()
+                .iter()
+                .position(|candidate| candidate.text == initial.surface);
+            if let Some(index) = preferred_index {
+                candidates.select(index);
+            } else {
+                let mut values = vec![Candidate {
+                    text: initial.surface,
+                    reading: Some(initial.reading.clone()),
+                    source_label: initial
+                        .from_dictionary
+                        .then(|| CandidateSource::Dictionary.label().to_string()),
+                    description: None,
+                }];
+                values.extend(candidates.candidates().iter().cloned());
+                candidates = CandidateList::new(values);
+            }
+            segments.push(crate::core::state::ConversionSegment {
+                reading_range: initial.start..initial.end,
+                reading: initial.reading,
+                candidates,
+            });
+        }
+        crate::core::state::ConversionSession::segmented(reading.to_string(), segments)
+    }
+
+    /// Transition to Conversion state with the given session.
     ///
     /// Sets up the preedit (highlighted selected text), updates the state, and
     /// returns an EngineResult with preedit, candidates, and aux text actions.
-    fn enter_conversion_state(&mut self, reading: &str, candidates: CandidateList) -> EngineResult {
-        let selected_text = candidates.selected_text().unwrap_or(reading).to_string();
-
-        let preedit = Preedit::from_segments(
-            vec![PreeditSegment::highlighted(&selected_text)],
-            selected_text.chars().count(),
-        );
-
-        self.state = InputState::Conversion {
-            session: crate::core::state::ConversionSession::single(
-                reading.to_string(),
-                candidates.clone(),
-            ),
-        };
+    fn enter_conversion_state(
+        &mut self,
+        session: crate::core::state::ConversionSession,
+    ) -> EngineResult {
+        let reading = session.reading.clone();
+        let preedit = session.preedit().clone();
+        let candidates = session.candidates().cloned().unwrap_or_default();
+        self.state = InputState::Conversion { session };
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
             .with_action(EngineAction::ShowCandidates(candidates.clone()))
             .with_action(EngineAction::UpdateAuxText(
-                self.format_aux_conversion_with_page(reading, Some(&candidates)),
+                self.format_aux_conversion_with_page(&reading, Some(&candidates)),
             ))
     }
 
@@ -833,15 +919,14 @@ impl InputMethodEngine {
 
     /// Navigate candidates with the given operation, then update preedit
     fn navigate_candidate(&mut self, op: impl FnOnce(&mut CandidateList) -> bool) -> EngineResult {
-        let (selected_text, candidates) = {
+        let candidates = {
             let Some(candidates) = self.state.candidates_mut() else {
                 return EngineResult::not_consumed();
             };
             op(candidates);
-            let text = candidates.selected_text().unwrap_or("").to_string();
-            (text, candidates.clone())
+            candidates.clone()
         };
-        self.update_conversion_preedit(&selected_text, &candidates)
+        self.update_conversion_preedit(&candidates)
     }
 
     /// Select next candidate
@@ -877,7 +962,7 @@ impl InputMethodEngine {
 
     /// Select candidate by digit (1-9)
     fn select_candidate_by_digit(&mut self, digit: usize) -> EngineResult {
-        let (selected_text, reading) = {
+        let selected = {
             let candidates = match self.state.candidates_mut() {
                 Some(c) => c,
                 None => return EngineResult::not_consumed(),
@@ -886,10 +971,11 @@ impl InputMethodEngine {
             if candidates.select_on_page(digit).is_none() {
                 return EngineResult::consumed();
             }
-
-            let text = candidates.selected_text().unwrap_or("").to_string();
-            let reading = candidates.selected().and_then(|c| c.reading.clone());
-            (text, reading)
+            true
+        };
+        debug_assert!(selected);
+        let Some((selected_text, reading)) = self.selected_conversion_info() else {
+            return EngineResult::not_consumed();
         };
 
         // Record learning before committing
@@ -910,32 +996,24 @@ impl InputMethodEngine {
     }
 
     /// Update preedit after candidate selection change
-    fn update_conversion_preedit(
-        &mut self,
-        selected_text: &str,
-        candidates: &CandidateList,
-    ) -> EngineResult {
-        let mut preedit = Preedit::with_text(selected_text);
-        preedit.set_attributes(vec![PreeditAttribute::new(
-            0,
-            selected_text.chars().count(),
-            AttributeType::Highlight,
-        )]);
-
-        if let Some(p) = self.state.preedit_mut() {
-            *p = preedit.clone();
-        }
-
-        let reading = candidates
-            .selected()
-            .and_then(|c| c.reading.as_deref())
-            .unwrap_or("");
+    fn update_conversion_preedit(&mut self, candidates: &CandidateList) -> EngineResult {
+        let (preedit, reading) = match &mut self.state {
+            InputState::Conversion { session } => {
+                session.rebuild_preedit();
+                let reading = session
+                    .active()
+                    .map(|segment| segment.reading.clone())
+                    .unwrap_or_default();
+                (session.preedit().clone(), reading)
+            }
+            _ => return EngineResult::not_consumed(),
+        };
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
             .with_action(EngineAction::ShowCandidates(candidates.clone()))
             .with_action(EngineAction::UpdateAuxText(
-                self.format_aux_conversion_with_page(reading, Some(candidates)),
+                self.format_aux_conversion_with_page(&reading, Some(candidates)),
             ))
     }
 

@@ -55,6 +55,17 @@ impl ConversionSession {
         }
     }
 
+    pub fn segmented(reading: String, segments: Vec<ConversionSegment>) -> Self {
+        let mut session = Self {
+            reading,
+            segments,
+            active_segment: 0,
+            preedit: Preedit::new(),
+        };
+        session.rebuild_preedit();
+        session
+    }
+
     pub fn preedit(&self) -> &Preedit {
         &self.preedit
     }
@@ -84,6 +95,28 @@ impl ConversionSession {
             .iter()
             .map(ConversionSegment::selected_text)
             .collect()
+    }
+
+    pub fn rebuild_preedit(&mut self) {
+        let mut caret = 0;
+        let segments = self
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(index, segment)| {
+                let text = segment.selected_text().to_string();
+                caret += text.chars().count();
+                PreeditSegment::new(
+                    text,
+                    if index == self.active_segment {
+                        super::preedit::AttributeType::Highlight
+                    } else {
+                        super::preedit::AttributeType::Underline
+                    },
+                )
+            })
+            .collect();
+        self.preedit = Preedit::from_segments(segments, caret);
     }
 }
 
