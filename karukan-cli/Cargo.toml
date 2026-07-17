@@ -26,6 +26,8 @@ http-body-util = "0.1"
 # sudachi-dict 用
 indicatif = "0.17"
 rayon = "1.11.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+sha2 = "0.10"
 
 [[bin]]
 name = "karukan-dict"
@@ -38,6 +40,10 @@ path = "src/bin/sudachi_dict.rs"
 [[bin]]
 name = "ajimee-bench"
 path = "src/bin/ajimee_bench.rs"
+
+[[bin]]
+name = "karukan-dict-sources"
+path = "src/bin/dict_sources.rs"
 
 [[bin]]
 name = "karukan-server"

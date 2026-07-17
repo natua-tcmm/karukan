@@ -1,0 +1,9 @@
+# Reproducible dictionary source manifest.
+#
+# Source-specific entries are added alongside their importers. Every enabled
+# source must pin a versioned URL, SHA-256, license identifier, and output
+# filename. Downloaded archives and generated dictionaries are release
+# artifacts and are intentionally not committed to Git.
+
+schema_version = 1
+sources = []
