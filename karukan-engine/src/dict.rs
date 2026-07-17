@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use yada::DoubleArray;
 use yada::builder::DoubleArrayBuilder;
 
+use crate::dictionary_source::{NormalizedDictionaryEntry, merge_normalized_entries, read_jsonl};
 use crate::kana::katakana_to_hiragana;
 
 const MAGIC: &[u8; 4] = b"KRKN";
@@ -194,6 +195,42 @@ impl Dictionary {
             trie: DoubleArray::new(trie_bytes),
             entries,
         })
+    }
+
+    /// Build a dictionary from normalized interchange records.
+    pub fn build_from_normalized(
+        entries: impl IntoIterator<Item = NormalizedDictionaryEntry>,
+    ) -> Result<Self> {
+        let normalized = merge_normalized_entries(entries);
+        let mut grouped: HashMap<String, Vec<Candidate>> = HashMap::new();
+        for entry in normalized {
+            grouped.entry(entry.reading).or_default().push(Candidate {
+                surface: entry.surface,
+                score: entry.score,
+                source: entry.source,
+                category: entry.category,
+                description: entry.description,
+            });
+        }
+        let mut entries: Vec<DictEntry> = grouped
+            .into_iter()
+            .map(|(reading, mut candidates)| {
+                candidates.sort_by(|a, b| a.score.total_cmp(&b.score));
+                DictEntry {
+                    reading,
+                    candidates,
+                }
+            })
+            .collect();
+        entries.sort_by(|a, b| a.reading.as_bytes().cmp(b.reading.as_bytes()));
+        Self::build_from_entries(entries)
+    }
+
+    /// Build directly from the normalized JSONL interchange format.
+    pub fn build_from_normalized_jsonl(path: impl AsRef<Path>) -> Result<Self> {
+        let entries = read_jsonl(path.as_ref())
+            .map_err(|error| DictError::Format(format!("invalid normalized JSONL: {error}")))?;
+        Self::build_from_normalized(entries)
     }
 
     /// Build a Dictionary from a JSON file.

@@ -1,4 +1,5 @@
 pub mod dict;
+pub mod dictionary_import;
 pub mod dictionary_source;
 pub mod kana;
 pub mod kanji;
