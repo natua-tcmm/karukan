@@ -69,3 +69,38 @@ fn test_alphabet_mode_space_inserts_literal_space() {
     engine.process_key(&press('k'));
     assert_eq!(engine.preedit().unwrap().text(), "New york");
 }
+
+#[test]
+fn dictionary_lattice_emits_multiple_candidates_for_multiple_segments() {
+    use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
+    use karukan_engine::{DictionaryCategory, DictionarySource};
+
+    let entry = |reading: &str, surface: &str, score: f32| {
+        NormalizedDictionaryEntry::new(
+            reading,
+            surface,
+            score,
+            DictionarySource::Mozc,
+            DictionaryCategory::General,
+            None,
+        )
+        .unwrap()
+    };
+    let dictionary = Dictionary::build_from_normalized([
+        entry("とうきょう", "東京", 0.0),
+        entry("えき", "駅", 0.0),
+        entry("えき", "驛", 1.0),
+    ])
+    .unwrap();
+    let mut engine = InputMethodEngine::new();
+    engine.dicts.system = Some(dictionary);
+
+    let candidates = engine.dictionary_lattice_candidates("とうきょうえき", 9);
+    let texts: Vec<_> = candidates
+        .iter()
+        .map(|candidate| candidate.text.as_str())
+        .collect();
+    assert_eq!(texts[0], "東京駅");
+    assert!(texts.contains(&"東京驛"));
+    assert!(candidates.len() <= 9);
+}

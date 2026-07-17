@@ -10,6 +10,7 @@ mod display;
 mod init;
 mod input;
 mod input_buffer;
+mod long_conversion;
 mod types;
 
 pub use types::*;
@@ -39,6 +40,8 @@ enum CandidateSource {
     Learning,
     /// Model inference result
     Model,
+    /// Candidate assembled from model and dictionary segments
+    Hybrid,
     /// System dictionary lookup (also covers reading→symbol lookups via
     /// mozc's symbol.tsv — they're treated as just another dictionary).
     Dictionary,
@@ -54,6 +57,7 @@ impl CandidateSource {
             CandidateSource::UserDictionary => "\u{1F464} \u{30E6}\u{30FC}\u{30B6}\u{30FC}", // 👤 ユーザー
             CandidateSource::Learning => "\u{1F4DD} \u{5B66}\u{7FD2}", // 📝 学習
             CandidateSource::Model => "\u{1F916} AI",                  // 🤖 AI
+            CandidateSource::Hybrid => "\u{1F9E9} AI+\u{8F9E}\u{66F8}", // 🧩 AI+辞書
             CandidateSource::Dictionary => "\u{1F4DA} \u{8F9E}\u{66F8}", // 📚 辞書
             CandidateSource::Rewriter => "\u{1F504} \u{5909}\u{63DB}", // 🔄 変換
             CandidateSource::Fallback => "",

@@ -7,6 +7,10 @@ use std::time::Instant;
 use tracing::debug;
 
 use super::*;
+use crate::core::engine::long_conversion::{
+    MAX_FINAL_CANDIDATES, MAX_SEARCH_STATES, MAX_SEGMENT_CANDIDATES, RankedText,
+    combine_segment_options, split_conversion_reading,
+};
 
 /// Maximum number of learning candidates to show
 const MAX_LEARNING_CANDIDATES: usize = 3;
@@ -109,7 +113,7 @@ impl InputMethodEngine {
             .convert_scored(&katakana, api_context, candidate_count)
             .unwrap_or_default();
 
-        self.metrics.conversion_ms = start.elapsed().as_millis() as u64;
+        self.metrics.conversion_ms += start.elapsed().as_millis() as u64;
         self.metrics.model_name = model_name;
 
         candidates
@@ -262,6 +266,149 @@ impl InputMethodEngine {
         candidates
     }
 
+    fn dictionary_lattice_paths(
+        &self,
+        reading: &str,
+        max_paths: usize,
+    ) -> Vec<karukan_engine::LatticePath> {
+        let mut dictionaries = Vec::new();
+        if let Some(dictionary) = self.dicts.user.as_ref() {
+            dictionaries.push(karukan_engine::LatticeDictionary {
+                dictionary,
+                kind: karukan_engine::LatticeDictionaryKind::User,
+                score_bias: -100.0,
+            });
+        }
+        if let Some(dictionary) = self.dicts.system.as_ref() {
+            dictionaries.push(karukan_engine::LatticeDictionary {
+                dictionary,
+                kind: karukan_engine::LatticeDictionaryKind::System,
+                score_bias: 0.0,
+            });
+        }
+        karukan_engine::search_dictionary_lattice(
+            reading,
+            &dictionaries,
+            karukan_engine::LatticeLimits {
+                segment_candidates: MAX_SEGMENT_CANDIDATES,
+                beam_width: MAX_SEARCH_STATES,
+                max_paths,
+                ..karukan_engine::LatticeLimits::default()
+            },
+        )
+    }
+
+    /// Convert complete dictionary-lattice paths into regular IME candidates.
+    pub(super) fn dictionary_lattice_candidates(
+        &self,
+        reading: &str,
+        limit: usize,
+    ) -> Vec<ConversionCandidate> {
+        self.dictionary_lattice_paths(reading, limit)
+            .into_iter()
+            // A fully unknown path is the hiragana fallback, not a dictionary result.
+            .filter(|path| path.segments.iter().any(|segment| segment.source.is_some()))
+            .map(|path| {
+                let mut descriptions = Vec::new();
+                for description in path
+                    .segments
+                    .iter()
+                    .filter_map(|segment| segment.description.as_deref())
+                {
+                    if !descriptions.contains(&description) {
+                        descriptions.push(description);
+                    }
+                }
+                ConversionCandidate::new(path.surface, CandidateSource::Dictionary)
+                    .with_raw_score(Some(path.score))
+                    .with_description((!descriptions.is_empty()).then(|| descriptions.join(" / ")))
+            })
+            .collect()
+    }
+
+    /// Generate long-input candidates whose individual spans may independently
+    /// come from the model or the dictionary lattice.
+    fn build_hybrid_candidates(
+        &mut self,
+        reading: &str,
+        api_context: &str,
+    ) -> Vec<ConversionCandidate> {
+        if self.input_mode == InputMode::Emoji || !karukan_engine::contains_kana(reading) {
+            return Vec::new();
+        }
+        let lattice = self.dictionary_lattice_paths(reading, 1);
+        let boundaries = lattice
+            .first()
+            .map(|path| {
+                path.segments
+                    .iter()
+                    .map(|segment| segment.char_end)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let spans = split_conversion_reading(reading, self.config.composing_chunk_len, &boundaries);
+        if spans.len() <= 1 {
+            return Vec::new();
+        }
+
+        let mut segment_options = Vec::new();
+        let mut context = api_context.to_string();
+        for span in spans {
+            if span.passthrough {
+                segment_options.push(vec![RankedText {
+                    text: span.text.clone(),
+                    cost: 0.0,
+                }]);
+                context.push_str(&span.text);
+                continue;
+            }
+
+            // Materialize dictionary paths before inference so no immutable
+            // dictionary borrow overlaps the mutable model call.
+            let dictionary = self.dictionary_lattice_candidates(&span.text, MAX_SEGMENT_CANDIDATES);
+            let model =
+                self.run_kana_kanji_conversion(&span.text, &context, MAX_SEGMENT_CANDIDATES);
+            let mut options = Vec::new();
+            for (index, candidate) in model.into_iter().enumerate() {
+                options.push(RankedText {
+                    text: candidate.text,
+                    cost: index as f32 * 2.0,
+                });
+            }
+            for (index, candidate) in dictionary.into_iter().enumerate() {
+                options.push(RankedText {
+                    text: candidate.text,
+                    cost: index as f32 * 2.0 + 0.75,
+                });
+            }
+            options.push(RankedText {
+                text: span.text.clone(),
+                cost: 8.0,
+            });
+            let katakana = karukan_engine::hiragana_to_katakana(&span.text);
+            if katakana != span.text {
+                options.push(RankedText {
+                    text: katakana,
+                    cost: 8.5,
+                });
+            }
+            options.sort_by(|left, right| left.cost.total_cmp(&right.cost));
+            let mut seen = HashSet::new();
+            options.retain(|candidate| seen.insert(candidate.text.clone()));
+            options.truncate(MAX_SEGMENT_CANDIDATES);
+            context.push_str(&options[0].text);
+            segment_options.push(options);
+        }
+
+        combine_segment_options(&segment_options, MAX_SEARCH_STATES, MAX_FINAL_CANDIDATES)
+            .into_iter()
+            .map(|candidate| {
+                ConversionCandidate::new(candidate.text, CandidateSource::Hybrid)
+                    .with_raw_score(Some(-candidate.cost))
+            })
+            .collect()
+    }
+
     /// Build conversion candidates for a reading from multiple sources.
     ///
     /// Combines learning cache, dictionaries, and model inference results
@@ -289,7 +436,10 @@ impl InputMethodEngine {
         }
 
         let api_context = self.truncate_context_for_api();
-        let candidates = self.run_kana_kanji_conversion(reading, &api_context, num_candidates);
+        let model_candidates =
+            self.run_kana_kanji_conversion(reading, &api_context, num_candidates);
+        let lattice_candidates = self.dictionary_lattice_candidates(reading, MAX_FINAL_CANDIDATES);
+        let hybrid_candidates = self.build_hybrid_candidates(reading, &api_context);
 
         let hiragana = reading.to_string();
         let katakana = karukan_engine::hiragana_to_katakana(reading);
@@ -320,8 +470,28 @@ impl InputMethodEngine {
             }
         }
 
-        // 3. Model inference results
-        if candidates.is_empty() {
+        // 3. Bounded rank fusion of the full Main-model beam, dictionary
+        //    lattice K-best, and long-input hybrid candidates.
+        let mut generated = Vec::new();
+        for (index, candidate) in model_candidates.into_iter().enumerate() {
+            generated.push((
+                index as f32 * 3.0,
+                ConversionCandidate::new(candidate.text, CandidateSource::Model)
+                    .with_raw_score(candidate.score),
+            ));
+        }
+        for (index, candidate) in lattice_candidates.into_iter().enumerate() {
+            generated.push((index as f32 * 3.0 + 1.0, candidate));
+        }
+        for (index, candidate) in hybrid_candidates.into_iter().enumerate() {
+            generated.push((index as f32 * 3.0 + 2.0, candidate));
+        }
+        generated.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let mut generated_seen = HashSet::new();
+        generated.retain(|(_, candidate)| generated_seen.insert(candidate.text.clone()));
+        generated.truncate(num_candidates.min(MAX_FINAL_CANDIDATES));
+
+        if generated.is_empty() {
             // In emoji mode, defer the literal-fallback decision until
             // after rewriters have run — otherwise `:smile` would be
             // pinned to the top of the candidate list as a Fallback
@@ -333,11 +503,8 @@ impl InputMethodEngine {
                 ));
             }
         } else {
-            for candidate in candidates {
-                builder.push(
-                    ConversionCandidate::new(candidate.text, CandidateSource::Model)
-                        .with_raw_score(candidate.score),
-                );
+            for (_, candidate) in generated {
+                builder.push(candidate);
             }
         }
 
