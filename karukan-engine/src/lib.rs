@@ -1,6 +1,7 @@
 pub mod dict;
 pub mod dictionary_import;
 pub mod dictionary_source;
+pub mod geographic_import;
 pub mod kana;
 pub mod kanji;
 pub mod learning;

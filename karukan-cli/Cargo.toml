@@ -50,5 +50,9 @@ name = "karukan-dict-import"
 path = "src/bin/dict_import.rs"
 
 [[bin]]
+name = "karukan-dict-geography"
+path = "src/bin/dict_geography.rs"
+
+[[bin]]
 name = "karukan-server"
 path = "src/bin/server.rs"

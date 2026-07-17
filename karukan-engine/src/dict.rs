@@ -31,7 +31,7 @@ const VERSION_V1: u32 = 1;
 const VERSION: u32 = 2;
 
 /// Origin of a dictionary candidate.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum DictionarySource {
@@ -81,7 +81,7 @@ impl DictionarySource {
 }
 
 /// Semantic category used for ranking and candidate descriptions.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum DictionaryCategory {
