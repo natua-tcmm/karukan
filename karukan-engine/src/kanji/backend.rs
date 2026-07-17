@@ -16,6 +16,17 @@ pub struct ConversionConfig {
     pub max_new_tokens: usize,
 }
 
+/// One candidate produced by the neural conversion model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelCandidate {
+    /// Converted text.
+    pub text: String,
+    /// Cumulative log probability from beam search (higher is better).
+    ///
+    /// Greedy decoding and reading fallbacks do not currently expose a score.
+    pub score: Option<f32>,
+}
+
 impl Default for ConversionConfig {
     fn default() -> Self {
         Self { max_new_tokens: 50 }
@@ -115,6 +126,24 @@ impl KanaKanjiConverter {
         context: &str,
         num_candidates: usize,
     ) -> Result<Vec<String>> {
+        Ok(self
+            .convert_scored(reading, context, num_candidates)?
+            .into_iter()
+            .map(|candidate| candidate.text)
+            .collect())
+    }
+
+    /// Convert kana to scored model candidates.
+    ///
+    /// Beam-search results retain the cumulative log probability returned by
+    /// llama.cpp. Greedy decoding returns `None` because that path does not
+    /// currently calculate a sequence score.
+    pub fn convert_scored(
+        &self,
+        reading: &str,
+        context: &str,
+        num_candidates: usize,
+    ) -> Result<Vec<ModelCandidate>> {
         // Convert hiragana to katakana (model expects katakana input)
         let katakana = hiragana_to_katakana(reading);
 
@@ -137,7 +166,10 @@ impl KanaKanjiConverter {
             let clean = clean_model_output(&text);
 
             if !clean.is_empty() {
-                candidates.push(clean);
+                candidates.push(ModelCandidate {
+                    text: clean,
+                    score: None,
+                });
             }
         } else {
             // Multiple candidates: use beam search
@@ -148,19 +180,26 @@ impl KanaKanjiConverter {
                 num_candidates,
             )?;
 
-            for (output_tokens, _score) in results {
+            for (output_tokens, score) in results {
                 let text = self.model.decode(&output_tokens, true)?;
                 let clean = clean_model_output(&text);
 
-                if !clean.is_empty() && !candidates.contains(&clean) {
-                    candidates.push(clean);
+                if !clean.is_empty() && !candidates.iter().any(|candidate| candidate.text == clean)
+                {
+                    candidates.push(ModelCandidate {
+                        text: clean,
+                        score: Some(score),
+                    });
                 }
             }
         }
 
         // If no candidates, return the original reading
         if candidates.is_empty() {
-            candidates.push(reading.to_string());
+            candidates.push(ModelCandidate {
+                text: reading.to_string(),
+                score: None,
+            });
         }
 
         Ok(candidates)

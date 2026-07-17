@@ -7,7 +7,8 @@ pub mod llamacpp;
 pub mod model_config;
 
 pub use backend::{
-    Backend, ConversionConfig, KanaKanjiConverter, build_jinen_prompt, clean_model_output,
+    Backend, ConversionConfig, KanaKanjiConverter, ModelCandidate, build_jinen_prompt,
+    clean_model_output,
 };
 pub use error::KanjiError;
 pub use hf_download::{

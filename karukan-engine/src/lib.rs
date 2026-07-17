@@ -10,7 +10,7 @@ pub use kana::{
     contains_kana, hiragana_to_half_katakana, hiragana_to_katakana, is_pure_full_katakana,
     is_pure_hiragana, katakana_to_hiragana, normalize_nfkc,
 };
-pub use kanji::{Backend, KanaKanjiConverter};
+pub use kanji::{Backend, KanaKanjiConverter, ModelCandidate};
 pub use learning::LearningCache;
 pub use rewriter::{
     AlphabetRewriter, EmojiRewriter, HalfWidthKatakanaRewriter, RewriteOutput, Rewriter,
