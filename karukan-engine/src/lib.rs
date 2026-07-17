@@ -4,6 +4,7 @@ pub mod dictionary_source;
 pub mod geographic_import;
 pub mod kana;
 pub mod kanji;
+pub mod lattice;
 pub mod learning;
 pub mod rewriter;
 pub mod romaji;
@@ -17,6 +18,10 @@ pub use kana::{
     is_pure_hiragana, katakana_to_hiragana, normalize_nfkc,
 };
 pub use kanji::{Backend, KanaKanjiConverter, ModelCandidate};
+pub use lattice::{
+    LatticeDictionary, LatticeDictionaryKind, LatticeLimits, LatticePath, LatticeSegment,
+    search_dictionary_lattice,
+};
 pub use learning::LearningCache;
 pub use rewriter::{
     AlphabetRewriter, EmojiRewriter, HalfWidthKatakanaRewriter, RewriteOutput, Rewriter,
