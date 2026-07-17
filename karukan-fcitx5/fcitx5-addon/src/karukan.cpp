@@ -340,9 +340,8 @@ void KarukanEngine::selectCandidate(InputContext* ic, int index) {
         return;
     }
 
-    // Process the selection key (1-9)
-    uint32_t keysym = XKB_KEY_1 + index;
-    karukan_engine_process_key(rustEngine, keysym, 0, 0);
+    // Apply to the active segment. Enter commits the complete conversion.
+    karukan_engine_select_candidate(rustEngine, static_cast<uint32_t>(index));
 
     state->updateUI();
 }

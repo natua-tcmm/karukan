@@ -117,6 +117,7 @@ fn test_null_engine_safety() {
         karukan_engine_process_key(ptr::null_mut(), XKB_KEY_A, 0, 0),
         0
     );
+    assert_eq!(karukan_engine_select_candidate(ptr::null_mut(), 0), 0);
     assert_eq!(karukan_engine_has_preedit(ptr::null()), 0);
     assert!(karukan_engine_get_preedit(ptr::null()).is_null());
     assert_eq!(karukan_engine_get_preedit_len(ptr::null()), 0);

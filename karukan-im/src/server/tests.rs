@@ -144,7 +144,7 @@ fn test_explicit_commit_method() {
 }
 
 #[test]
-fn test_select_candidate_commits_page_candidate() {
+fn test_select_candidate_applies_segment_then_explicit_commit_finishes() {
     let mut server = test_server();
     press(&mut server, XKB_KEY_K);
     press(&mut server, XKB_KEY_A);
@@ -160,13 +160,25 @@ fn test_select_candidate_commits_page_candidate() {
         json!({"jsonrpc":"2.0","id":20,"method":"select_candidate","params":{"page_index":0}}),
     );
     assert_eq!(resp["result"]["consumed"], true);
-    let commits = actions_of(&resp, "commit");
-    assert_eq!(commits.last().unwrap()["text"], first_text);
-    assert!(!actions_of(&resp, "hide_candidates").is_empty());
+    assert!(actions_of(&resp, "commit").is_empty());
+    assert!(!actions_of(&resp, "show_candidates").is_empty());
 
     let resp = request(
         &mut server,
         json!({"jsonrpc":"2.0","id":21,"method":"status"}),
+    );
+    assert_eq!(resp["result"]["state"], "conversion");
+
+    let resp = request(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":24,"method":"commit"}),
+    );
+    let commits = actions_of(&resp, "commit");
+    assert_eq!(commits.last().unwrap()["text"], first_text);
+
+    let resp = request(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":25,"method":"status"}),
     );
     assert_eq!(resp["result"]["state"], "empty");
 }

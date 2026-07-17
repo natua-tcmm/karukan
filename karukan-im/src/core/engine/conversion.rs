@@ -1050,7 +1050,7 @@ impl InputMethodEngine {
 
     /// Select candidate by digit (1-9)
     fn select_candidate_by_digit(&mut self, digit: usize) -> EngineResult {
-        let selected = {
+        let candidates = {
             let candidates = match self.state.candidates_mut() {
                 Some(c) => c,
                 None => return EngineResult::not_consumed(),
@@ -1059,28 +1059,11 @@ impl InputMethodEngine {
             if candidates.select_on_page(digit).is_none() {
                 return EngineResult::consumed();
             }
-            true
+            candidates.clone()
         };
-        debug_assert!(selected);
-        let Some((selected_text, reading)) = self.selected_conversion_info() else {
-            return EngineResult::not_consumed();
-        };
-
-        // Record learning before committing
-        if let Some(reading) = &reading {
-            self.record_learning(reading, &selected_text);
-        }
-
-        // Commit immediately after digit selection
-
-        self.state = InputState::Empty;
-        self.clear_composing_candidates();
-
-        EngineResult::consumed()
-            .with_action(EngineAction::UpdatePreedit(Preedit::new()))
-            .with_action(EngineAction::HideCandidates)
-            .with_action(EngineAction::HideAuxText)
-            .with_action(EngineAction::Commit(selected_text))
+        // A digit/click applies the candidate to the active segment only.
+        // Enter or the explicit `commit` API commits the complete session.
+        self.update_conversion_preedit(&candidates)
     }
 
     /// Update preedit after candidate selection change

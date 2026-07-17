@@ -58,6 +58,15 @@ int karukan_engine_process_key(
 );
 
 /*
+ * Apply a 0-based candidate from the visible page to the active conversion
+ * segment. This does not commit the whole conversion.
+ */
+int karukan_engine_select_candidate(
+    KarukanEngine* engine,
+    uint32_t page_index
+);
+
+/*
  * Reset the engine state, clearing any pending input.
  */
 void karukan_engine_reset(KarukanEngine* engine);

@@ -137,6 +137,12 @@ class KarukanInputController: IMKInputController {
                 setMarkedText(text: text, caret: caret, attributes: attributes, client: client)
 
             case .showCandidates(let candidates, let cursor, let page, let totalPages):
+                Self.candidateWindow.onSelect = { [weak self] pageIndex in
+                    guard let self,
+                        let result = engineClient.selectCandidateSync(pageIndex: pageIndex)
+                    else { return }
+                    self.apply(actions: result.actions, client: client)
+                }
                 // Query the composition anchor (a synchronous IPC into the
                 // focused app) only when the panel comes on screen; it
                 // doesn't move while the panel stays visible.

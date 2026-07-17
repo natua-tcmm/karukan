@@ -24,6 +24,10 @@
 //! All positions (`caret`, attribute `start`/`end`, `cursor_pos`) are in
 //! Unicode scalar values (Rust `char` counts), not bytes and not UTF-16
 //! code units.
+//!
+//! Protocol v2 changes `select_candidate` from "select and commit" to
+//! "apply to the active segment". Clients use `commit` or Return to finish
+//! the complete conversion.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -31,7 +35,7 @@ use serde_json::Value;
 use crate::core::keycode::KeyModifiers;
 
 /// Protocol version reported by `init`. Bump on breaking changes.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 // === JSON-RPC envelope ===
 

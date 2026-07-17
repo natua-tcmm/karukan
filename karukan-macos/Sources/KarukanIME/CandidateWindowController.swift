@@ -17,6 +17,7 @@ class CandidateWindowController {
     private let stackView: NSStackView
     private var rowViews: [NSView] = []
     private var auxText: String?
+    var onSelect: ((Int) -> Void)?
 
     private struct PageState {
         let candidates: [CandidateItem]
@@ -37,7 +38,7 @@ class CandidateWindowController {
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = NSColor.windowBackgroundColor
-        panel.ignoresMouseEvents = true
+        panel.ignoresMouseEvents = false
 
         stackView = NSStackView()
         stackView.orientation = .vertical
@@ -84,6 +85,7 @@ class CandidateWindowController {
 
     func hide() {
         pageState = nil
+        onSelect = nil
         panel.orderOut(nil)
     }
 
@@ -136,17 +138,24 @@ class CandidateWindowController {
                 ))
         }
 
-        let label = NSTextField(labelWithAttributedString: text)
-        label.translatesAutoresizingMaskIntoConstraints = false
+        let button = NSButton(title: "", target: self, action: #selector(candidateClicked(_:)))
+        button.attributedTitle = text
+        button.tag = number - 1
+        button.isBordered = false
+        button.alignment = .left
+        button.translatesAutoresizingMaskIntoConstraints = false
         if selected {
-            label.backgroundColor = NSColor.selectedContentBackgroundColor
-            label.drawsBackground = true
+            button.wantsLayer = true
+            button.layer?.backgroundColor = NSColor.selectedContentBackgroundColor.cgColor
         } else {
-            label.backgroundColor = .clear
-            label.drawsBackground = false
+            button.wantsLayer = false
         }
-        stackView.addArrangedSubview(label)
-        rowViews.append(label)
+        stackView.addArrangedSubview(button)
+        rowViews.append(button)
+    }
+
+    @objc private func candidateClicked(_ sender: NSButton) {
+        onSelect?(sender.tag)
     }
 
     private func addFooterLabel(_ text: String) {

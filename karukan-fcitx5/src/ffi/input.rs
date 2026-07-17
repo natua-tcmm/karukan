@@ -28,6 +28,21 @@ pub extern "C" fn karukan_engine_process_key(
     if result.consumed { 1 } else { 0 }
 }
 
+/// Apply a candidate from the currently displayed page to the active segment.
+/// The conversion remains active until Enter or an explicit commit.
+#[unsafe(no_mangle)]
+pub extern "C" fn karukan_engine_select_candidate(
+    engine: *mut KarukanEngine,
+    page_index: c_uint,
+) -> c_int {
+    let engine = ffi_mut!(engine, 0);
+    engine.clear_flags();
+    let result = engine.engine.select_candidate_on_page(page_index as usize);
+    engine.apply_actions(result.actions);
+    engine.sync_timing();
+    if result.consumed { 1 } else { 0 }
+}
+
 /// Reset the engine state
 #[unsafe(no_mangle)]
 pub extern "C" fn karukan_engine_reset(engine: *mut KarukanEngine) {
