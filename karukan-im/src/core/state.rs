@@ -14,6 +14,8 @@ pub struct ConversionSegment {
     pub reading_range: Range<usize>,
     pub reading: String,
     pub candidates: CandidateList,
+    /// Whether the user explicitly changed this segment during conversion.
+    pub explicitly_modified: bool,
 }
 
 impl ConversionSegment {
@@ -46,6 +48,7 @@ impl ConversionSession {
                 reading_range: 0..reading_len,
                 reading,
                 candidates,
+                explicitly_modified: false,
             }],
             active_segment: 0,
             preedit: Preedit::from_segments(

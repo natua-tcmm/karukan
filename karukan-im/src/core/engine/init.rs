@@ -36,6 +36,7 @@ impl InputMethodEngine {
         self.init_system_dictionary(settings.conversion.dict_path.as_deref());
         self.init_user_dictionaries();
         self.init_learning_cache(settings.learning.enabled, settings.learning.max_entries);
+        self.init_segment_learning_cache(settings.learning.enabled, settings.learning.max_entries);
 
         let n_threads = settings.conversion.n_threads;
 
@@ -142,6 +143,45 @@ impl InputMethodEngine {
             debug!("Learning cache not found at {:?}, starting empty", path);
             self.learning = Some(LearningCache::new(max_entries));
         }
+    }
+
+    /// Initialize the context-aware segment learning cache from disk.
+    pub fn init_segment_learning_cache(&mut self, enabled: bool, max_entries: usize) {
+        if !enabled || self.segment_learning.is_some() {
+            return;
+        }
+
+        let Some(path) = Settings::segment_learning_file() else {
+            debug!("Could not determine segment learning cache path");
+            self.segment_learning = Some(SegmentLearningCache::new(max_entries));
+            return;
+        };
+
+        self.segment_learning = Some(if path.exists() {
+            match SegmentLearningCache::load(&path, max_entries) {
+                Ok(cache) => {
+                    debug!(
+                        "Segment learning cache loaded from {:?} ({} entries)",
+                        path,
+                        cache.entry_count()
+                    );
+                    cache
+                }
+                Err(e) => {
+                    debug!(
+                        "Failed to load segment learning cache from {:?}: {}",
+                        path, e
+                    );
+                    SegmentLearningCache::new(max_entries)
+                }
+            }
+        } else {
+            debug!(
+                "Segment learning cache not found at {:?}, starting empty",
+                path
+            );
+            SegmentLearningCache::new(max_entries)
+        });
     }
 
     /// Initialize user dictionaries by scanning the user dictionary directory.

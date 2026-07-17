@@ -157,11 +157,13 @@ fn left_and_right_move_the_active_conversion_segment() {
             reading_range: 0..3,
             reading: "きょう".into(),
             candidates: CandidateList::from_strings_with_reading(["今日", "京"], "きょう"),
+            explicitly_modified: false,
         },
         ConversionSegment {
             reading_range: 3..5,
             reading: "いく".into(),
             candidates: CandidateList::from_strings_with_reading(["行く", "往く"], "いく"),
+            explicitly_modified: false,
         },
     ];
     let mut engine = InputMethodEngine::new();
@@ -206,16 +208,19 @@ fn shift_arrows_resize_only_the_active_and_next_segments() {
             reading_range: 0..8,
             reading: "じっちゅうはっく".into(),
             candidates: CandidateList::from_strings(["十中八九"]),
+            explicitly_modified: false,
         },
         ConversionSegment {
             reading_range: 8..11,
             reading: "あたる".into(),
             candidates: CandidateList::from_strings(["当たる"]),
+            explicitly_modified: false,
         },
         ConversionSegment {
             reading_range: 11..13,
             reading: "かも".into(),
             candidates: CandidateList::from_strings(["かも"]),
+            explicitly_modified: false,
         },
     ];
     let mut engine = InputMethodEngine::new();
@@ -243,4 +248,88 @@ fn shift_arrows_resize_only_the_active_and_next_segments() {
     assert_eq!(session.segments[0].reading, "じっちゅうはっく");
     assert_eq!(session.segments[1].reading, "あたる");
     assert!(session.ranges_are_valid());
+}
+
+#[test]
+fn explicitly_selected_segment_is_learned_with_right_context() {
+    use crate::core::state::{ConversionSegment, ConversionSession};
+
+    let segments = vec![
+        ConversionSegment {
+            reading_range: 0..2,
+            reading: "あと".into(),
+            candidates: CandidateList::from_strings(["後", "あと"]),
+            explicitly_modified: false,
+        },
+        ConversionSegment {
+            reading_range: 2..3,
+            reading: "、".into(),
+            candidates: CandidateList::from_strings(["、"]),
+            explicitly_modified: false,
+        },
+    ];
+    let mut engine = InputMethodEngine::new();
+    engine.segment_learning = Some(karukan_engine::SegmentLearningCache::new(100));
+    engine.state = InputState::Conversion {
+        session: ConversionSession::segmented("あと、".into(), segments),
+    };
+
+    engine.select_candidate_on_page(1);
+    engine.process_key(&press_key(Keysym::RETURN));
+
+    let learned = engine
+        .segment_learning
+        .as_ref()
+        .unwrap()
+        .lookup("あと", None, Some("、"));
+    assert_eq!(learned.len(), 1);
+    assert_eq!(learned[0].0.surface, "あと");
+}
+
+#[test]
+fn accepting_initial_segment_does_not_enter_segment_learning() {
+    use crate::core::state::{ConversionSegment, ConversionSession};
+
+    let segments = vec![ConversionSegment {
+        reading_range: 0..2,
+        reading: "あと".into(),
+        candidates: CandidateList::from_strings(["後", "あと"]),
+        explicitly_modified: false,
+    }];
+    let mut engine = InputMethodEngine::new();
+    engine.segment_learning = Some(karukan_engine::SegmentLearningCache::new(100));
+    engine.state = InputState::Conversion {
+        session: ConversionSession::segmented("あと".into(), segments),
+    };
+
+    engine.process_key(&press_key(Keysym::RETURN));
+
+    assert!(
+        engine
+            .segment_learning
+            .as_ref()
+            .unwrap()
+            .lookup("あと", None, None)
+            .is_empty()
+    );
+}
+
+#[test]
+fn segment_learning_precedes_initial_whole_reading_candidate() {
+    let mut engine = InputMethodEngine::new();
+    let mut cache = karukan_engine::SegmentLearningCache::new(100);
+    cache.record("あと", "あと", None, Some("、"));
+    engine.segment_learning = Some(cache);
+    engine.set_surrounding_context("", "、");
+
+    let session = engine
+        .build_initial_conversion_session("あと", CandidateList::from_strings(["後", "あと"]));
+
+    assert_eq!(session.selected_text(), "あと");
+    assert_eq!(
+        session.segments[0].candidates.candidates()[0]
+            .description
+            .as_deref(),
+        Some("文節修正")
+    );
 }

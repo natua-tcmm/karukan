@@ -205,16 +205,10 @@ impl InputMethodEngine {
         }
 
         let Some(path) = self.dictionary_lattice_paths(reading, 1).into_iter().next() else {
-            return crate::core::state::ConversionSession::single(
-                reading.to_string(),
-                full_candidates,
-            );
+            return self.single_segment_session_with_learning(reading, full_candidates);
         };
         if !path.segments.iter().any(|segment| segment.source.is_some()) {
-            return crate::core::state::ConversionSession::single(
-                reading.to_string(),
-                full_candidates,
-            );
+            return self.single_segment_session_with_learning(reading, full_candidates);
         }
 
         // Unknown fallback edges are one character wide in the lattice. Merge
@@ -240,31 +234,50 @@ impl InputMethodEngine {
             });
         }
         if initial.len() <= 1 {
-            return crate::core::state::ConversionSession::single(
-                reading.to_string(),
-                full_candidates,
-            );
+            return self.single_segment_session_with_learning(reading, full_candidates);
         }
 
         let mut segments = Vec::new();
-        for initial in initial {
-            let mut candidates = CandidateList::new(
-                self.build_conversion_candidates(&initial.reading, MAX_SEGMENT_CANDIDATES, false)
-                    .into_iter()
-                    .map(|candidate| candidate.into_ui_candidate(&initial.reading))
-                    .collect(),
+        for (index, initial_segment) in initial.iter().enumerate() {
+            let left_hint = index
+                .checked_sub(1)
+                .and_then(|previous| initial[previous].surface.chars().last())
+                .map(|ch| ch.to_string())
+                .or_else(|| self.editor_left_hint());
+            let right_hint = initial
+                .get(index + 1)
+                .and_then(|next| next.surface.chars().next())
+                .map(|ch| ch.to_string())
+                .or_else(|| self.editor_right_hint());
+            let base_candidates = CandidateList::new(
+                self.build_conversion_candidates(
+                    &initial_segment.reading,
+                    MAX_SEGMENT_CANDIDATES,
+                    false,
+                )
+                .into_iter()
+                .map(|candidate| candidate.into_ui_candidate(&initial_segment.reading))
+                .collect(),
+            );
+            let (mut candidates, has_segment_learning) = self.prepend_segment_learning(
+                &initial_segment.reading,
+                base_candidates,
+                left_hint.as_deref(),
+                right_hint.as_deref(),
             );
             let preferred_index = candidates
                 .candidates()
                 .iter()
-                .position(|candidate| candidate.text == initial.surface);
-            if let Some(index) = preferred_index {
+                .position(|candidate| candidate.text == initial_segment.surface);
+            if has_segment_learning {
+                // The context-aware correction is intentionally first.
+            } else if let Some(index) = preferred_index {
                 candidates.select(index);
             } else {
                 let mut values = vec![Candidate {
-                    text: initial.surface,
-                    reading: Some(initial.reading.clone()),
-                    source_label: initial
+                    text: initial_segment.surface.clone(),
+                    reading: Some(initial_segment.reading.clone()),
+                    source_label: initial_segment
                         .from_dictionary
                         .then(|| CandidateSource::Dictionary.label().to_string()),
                     description: None,
@@ -273,12 +286,83 @@ impl InputMethodEngine {
                 candidates = CandidateList::new(values);
             }
             segments.push(crate::core::state::ConversionSegment {
-                reading_range: initial.start..initial.end,
-                reading: initial.reading,
+                reading_range: initial_segment.start..initial_segment.end,
+                reading: initial_segment.reading.clone(),
                 candidates,
+                explicitly_modified: false,
             });
         }
         crate::core::state::ConversionSession::segmented(reading.to_string(), segments)
+    }
+
+    fn single_segment_session_with_learning(
+        &self,
+        reading: &str,
+        candidates: CandidateList,
+    ) -> crate::core::state::ConversionSession {
+        let left_hint = self.editor_left_hint();
+        let right_hint = self.editor_right_hint();
+        let (candidates, _) = self.prepend_segment_learning(
+            reading,
+            candidates,
+            left_hint.as_deref(),
+            right_hint.as_deref(),
+        );
+        crate::core::state::ConversionSession::single(reading.to_string(), candidates)
+    }
+
+    fn editor_left_hint(&self) -> Option<String> {
+        self.surrounding_context
+            .as_ref()
+            .and_then(|context| context.left.as_deref())
+            .and_then(|left| left.chars().last())
+            .map(|ch| ch.to_string())
+    }
+
+    fn editor_right_hint(&self) -> Option<String> {
+        self.surrounding_context
+            .as_ref()
+            .and_then(|context| context.right.as_deref())
+            .and_then(|right| right.chars().next())
+            .map(|ch| ch.to_string())
+    }
+
+    fn prepend_segment_learning(
+        &self,
+        reading: &str,
+        candidates: CandidateList,
+        left_hint: Option<&str>,
+        right_hint: Option<&str>,
+    ) -> (CandidateList, bool) {
+        let Some(cache) = &self.segment_learning else {
+            return (candidates, false);
+        };
+        let learned = cache.lookup(reading, left_hint, right_hint);
+        if learned.is_empty() {
+            return (candidates, false);
+        }
+
+        let mut seen = HashSet::new();
+        let mut values = Vec::new();
+        for (entry, _) in learned.into_iter().take(MAX_LEARNING_CANDIDATES) {
+            if seen.insert(entry.surface.clone()) {
+                values.push(Candidate {
+                    text: entry.surface,
+                    reading: Some(reading.to_string()),
+                    source_label: Some(CandidateSource::Learning.label().to_string()),
+                    description: Some("文節修正".to_string()),
+                });
+            }
+        }
+        let has_segment_learning = !values.is_empty();
+        values.extend(
+            candidates
+                .candidates()
+                .iter()
+                .filter(|candidate| seen.insert(candidate.text.clone()))
+                .cloned(),
+        );
+        (CandidateList::new(values), has_segment_learning)
     }
 
     /// Transition to Conversion state with the given session.
@@ -818,13 +902,20 @@ impl InputMethodEngine {
         self.update_conversion_preedit(&candidates)
     }
 
-    fn segment_candidate_list(&mut self, reading: &str) -> CandidateList {
-        CandidateList::new(
+    fn segment_candidate_list(
+        &mut self,
+        reading: &str,
+        left_hint: Option<&str>,
+        right_hint: Option<&str>,
+    ) -> CandidateList {
+        let candidates = CandidateList::new(
             self.build_conversion_candidates(reading, MAX_SEGMENT_CANDIDATES, false)
                 .into_iter()
                 .map(|candidate| candidate.into_ui_candidate(reading))
                 .collect(),
-        )
+        );
+        self.prepend_segment_learning(reading, candidates, left_hint, right_hint)
+            .0
     }
 
     /// Move the active segment's right boundary. Expanding steals the first
@@ -863,8 +954,35 @@ impl InputMethodEngine {
         let (index, left_range, right_range, chars) = proposal;
         let left_reading: String = chars[left_range.clone()].iter().collect();
         let right_reading: String = chars[right_range.clone()].iter().collect();
-        let left_candidates = self.segment_candidate_list(&left_reading);
-        let right_candidates = self.segment_candidate_list(&right_reading);
+        let (left_outer_hint, right_outer_hint) = {
+            let InputState::Conversion { session } = &self.state else {
+                return EngineResult::not_consumed();
+            };
+            let left = index
+                .checked_sub(1)
+                .and_then(|previous| session.segments[previous].selected_text().chars().last())
+                .map(|ch| ch.to_string())
+                .or_else(|| self.editor_left_hint());
+            let right = session
+                .segments
+                .get(index + 2)
+                .and_then(|next| next.selected_text().chars().next())
+                .map(|ch| ch.to_string())
+                .or_else(|| self.editor_right_hint());
+            (left, right)
+        };
+        let left_right_hint = right_reading.chars().next().map(|ch| ch.to_string());
+        let right_left_hint = left_reading.chars().last().map(|ch| ch.to_string());
+        let left_candidates = self.segment_candidate_list(
+            &left_reading,
+            left_outer_hint.as_deref(),
+            left_right_hint.as_deref(),
+        );
+        let right_candidates = self.segment_candidate_list(
+            &right_reading,
+            right_left_hint.as_deref(),
+            right_outer_hint.as_deref(),
+        );
 
         let candidates = {
             let InputState::Conversion { session } = &mut self.state else {
@@ -874,11 +992,13 @@ impl InputMethodEngine {
                 reading_range: left_range,
                 reading: left_reading,
                 candidates: left_candidates,
+                explicitly_modified: true,
             };
             session.segments[index + 1] = crate::core::state::ConversionSegment {
                 reading_range: right_range,
                 reading: right_reading,
                 candidates: right_candidates,
+                explicitly_modified: true,
             };
             debug_assert!(session.ranges_are_valid());
             session.rebuild_preedit();
@@ -910,6 +1030,55 @@ impl InputMethodEngine {
         }
     }
 
+    /// Record only segments the user explicitly corrected. Merely accepting
+    /// the initial top candidate or live conversion does not enter this cache.
+    pub(super) fn record_modified_segments(&mut self) {
+        let records = {
+            let InputState::Conversion { session } = &self.state else {
+                return;
+            };
+            session
+                .segments
+                .iter()
+                .enumerate()
+                .filter(|(_, segment)| segment.explicitly_modified)
+                .map(|(index, segment)| {
+                    let left_hint = index
+                        .checked_sub(1)
+                        .and_then(|previous| {
+                            session.segments[previous].selected_text().chars().last()
+                        })
+                        .map(|ch| ch.to_string())
+                        .or_else(|| self.editor_left_hint());
+                    let right_hint = session
+                        .segments
+                        .get(index + 1)
+                        .and_then(|next| next.selected_text().chars().next())
+                        .map(|ch| ch.to_string())
+                        .or_else(|| self.editor_right_hint());
+                    (
+                        segment.reading.clone(),
+                        segment.selected_text().to_string(),
+                        left_hint,
+                        right_hint,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let Some(cache) = &mut self.segment_learning else {
+            return;
+        };
+        for (reading, surface, left_hint, right_hint) in records {
+            cache.record(
+                &reading,
+                &surface,
+                left_hint.as_deref(),
+                right_hint.as_deref(),
+            );
+        }
+    }
+
     /// Commit the current conversion
     fn commit_conversion(&mut self) -> EngineResult {
         let Some((text, reading)) = self.selected_conversion_info() else {
@@ -919,6 +1088,8 @@ impl InputMethodEngine {
         if text.is_empty() {
             return EngineResult::consumed();
         }
+
+        self.record_modified_segments();
 
         // Skip learning when the buffer is a `:shortcode` query — the
         // reading would be e.g. `:smile`, which isn't a hiragana key
@@ -946,6 +1117,8 @@ impl InputMethodEngine {
         let Some((text, reading)) = self.selected_conversion_info() else {
             return EngineResult::not_consumed();
         };
+
+        self.record_modified_segments();
 
         if self.input_mode != InputMode::Emoji
             && let Some(reading) = &reading
@@ -1008,11 +1181,16 @@ impl InputMethodEngine {
     /// Navigate candidates with the given operation, then update preedit
     fn navigate_candidate(&mut self, op: impl FnOnce(&mut CandidateList) -> bool) -> EngineResult {
         let candidates = {
-            let Some(candidates) = self.state.candidates_mut() else {
+            let InputState::Conversion { session } = &mut self.state else {
                 return EngineResult::not_consumed();
             };
-            op(candidates);
-            candidates.clone()
+            let Some(segment) = session.active_mut() else {
+                return EngineResult::not_consumed();
+            };
+            if op(&mut segment.candidates) {
+                segment.explicitly_modified = true;
+            }
+            segment.candidates.clone()
         };
         self.update_conversion_preedit(&candidates)
     }
@@ -1051,15 +1229,18 @@ impl InputMethodEngine {
     /// Select candidate by digit (1-9)
     fn select_candidate_by_digit(&mut self, digit: usize) -> EngineResult {
         let candidates = {
-            let candidates = match self.state.candidates_mut() {
-                Some(c) => c,
-                None => return EngineResult::not_consumed(),
+            let InputState::Conversion { session } = &mut self.state else {
+                return EngineResult::not_consumed();
+            };
+            let Some(segment) = session.active_mut() else {
+                return EngineResult::not_consumed();
             };
 
-            if candidates.select_on_page(digit).is_none() {
+            if segment.candidates.select_on_page(digit).is_none() {
                 return EngineResult::consumed();
             }
-            candidates.clone()
+            segment.explicitly_modified = true;
+            segment.candidates.clone()
         };
         // A digit/click applies the candidate to the active segment only.
         // Enter or the explicit `commit` API commits the complete session.

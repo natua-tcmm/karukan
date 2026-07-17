@@ -8,6 +8,7 @@ pub mod lattice;
 pub mod learning;
 pub mod rewriter;
 pub mod romaji;
+pub mod segment_learning;
 
 pub use dict::{
     Candidate as DictCandidate, DictEntry, Dictionary, DictionaryCategory, DictionarySource,
@@ -28,3 +29,4 @@ pub use rewriter::{
     RewriterChain, SymbolRewriter, description as symbol_description,
 };
 pub use romaji::{BackspaceResult, ConversionEvent, RomajiConverter};
+pub use segment_learning::{LearnedSegment, SegmentLearningCache};

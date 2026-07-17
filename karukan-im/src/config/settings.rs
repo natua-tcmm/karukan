@@ -154,6 +154,13 @@ impl Settings {
         Self::data_dir().map(|dir| dir.join("learning.tsv"))
     }
 
+    /// Get the context-aware segment learning cache file path.
+    ///
+    /// Default: `~/.local/share/karukan-im/segment_learning.tsv`
+    pub fn segment_learning_file() -> Option<PathBuf> {
+        Self::data_dir().map(|dir| dir.join("segment_learning.tsv"))
+    }
+
     /// Load settings from the default configuration file.
     /// Falls back to embedded default.toml if the config file does not exist.
     pub fn load() -> Result<Self> {

@@ -22,6 +22,7 @@ mod tests;
 
 use karukan_engine::{
     Dictionary, KanaKanjiConverter, LearningCache, RewriterChain, RomajiConverter,
+    SegmentLearningCache,
 };
 use tracing::{debug, trace};
 
@@ -184,6 +185,8 @@ pub struct InputMethodEngine {
     dicts: Dictionaries,
     /// Learning cache (user conversion history)
     learning: Option<LearningCache>,
+    /// Context-aware learning for explicitly corrected conversion segments.
+    segment_learning: Option<SegmentLearningCache>,
 }
 
 impl InputMethodEngine {
@@ -208,6 +211,7 @@ impl InputMethodEngine {
             chunks: Vec::new(),
             dicts: Dictionaries::default(),
             learning: None,
+            segment_learning: None,
         }
     }
 
@@ -546,6 +550,7 @@ impl InputMethodEngine {
             InputState::Conversion { session } => {
                 let text = session.selected_text();
                 let reading = Some(session.reading.clone());
+                self.record_modified_segments();
                 // Record conversion result in learning cache
                 if let Some(reading) = &reading {
                     self.record_learning(reading, &text);
@@ -585,6 +590,16 @@ impl InputMethodEngine {
                 debug!("Failed to save learning cache: {}", e);
             } else {
                 debug!("Learning cache saved to {:?}", path);
+            }
+        }
+        if let Some(cache) = &mut self.segment_learning
+            && cache.is_dirty()
+            && let Some(path) = Settings::segment_learning_file()
+        {
+            if let Err(e) = cache.save(&path) {
+                debug!("Failed to save segment learning cache: {}", e);
+            } else {
+                debug!("Segment learning cache saved to {:?}", path);
             }
         }
     }
