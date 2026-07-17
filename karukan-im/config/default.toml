@@ -2,6 +2,8 @@
 # このファイルは ~/.config/karukan-im/config.toml にコピーして使用してください
 
 [conversion]
+# ライブ変換中に生成するモデル候補数
+live_num_candidates = 3
 # 変換候補数（Space押下時）
 num_candidates = 9
 # 周辺テキスト（カーソル左側の確定済みテキスト）を変換時のコンテキストとして使用する

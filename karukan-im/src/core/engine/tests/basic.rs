@@ -155,6 +155,7 @@ fn test_engine_escape_does_not_cancel_composing() {
 fn test_pipeline_config_defaults() {
     // Verify pipeline config has sensible defaults
     let config = EngineConfig::default();
+    assert_eq!(config.live_num_candidates, 3);
     assert_eq!(config.num_candidates, 9);
 }
 

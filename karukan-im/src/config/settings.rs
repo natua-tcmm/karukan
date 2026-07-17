@@ -26,6 +26,8 @@ pub struct Settings {
 /// Conversion-related settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionSettings {
+    /// Number of model candidates generated during live conversion
+    pub live_num_candidates: usize,
     /// Number of candidates to show on Space conversion
     pub num_candidates: usize,
     /// Use surrounding text (text left of cursor) as context for conversion
@@ -214,6 +216,7 @@ mod tests {
     #[test]
     fn test_default_settings() {
         let settings = Settings::default();
+        assert_eq!(settings.conversion.live_num_candidates, 3);
         assert_eq!(settings.conversion.num_candidates, 9);
         assert!(settings.conversion.use_context);
         assert_eq!(settings.conversion.max_context_length, 10);

@@ -45,7 +45,7 @@ impl InputMethodEngine {
         let candidates = if convert {
             let reading = self.input_buf.text.clone();
             self.chunked_auto_suggest()
-                .map(|converted| (vec![converted], reading))
+                .map(|candidates| (candidates, reading))
         } else {
             self.chunks.clear();
             None

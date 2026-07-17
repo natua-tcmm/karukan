@@ -65,6 +65,8 @@ pub(in crate::core) struct SurroundingContext {
 /// Configuration for the IME engine
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
+    /// Number of model candidates generated during live conversion
+    pub live_num_candidates: usize,
     /// Number of conversion candidates for explicit conversion (Space key)
     pub num_candidates: usize,
     /// Maximum context length to display
@@ -85,6 +87,7 @@ impl EngineConfig {
     /// Shared by the fcitx5 FFI and the stdio JSON-RPC server.
     pub fn from_settings(settings: &crate::config::Settings) -> Self {
         Self {
+            live_num_candidates: settings.conversion.live_num_candidates,
             num_candidates: settings.conversion.num_candidates,
             display_context_len: 10,
             max_api_context_len: if settings.conversion.use_context {
@@ -101,6 +104,7 @@ impl EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
+            live_num_candidates: 3,
             num_candidates: 9,
             display_context_len: 10,
             max_api_context_len: 10,
@@ -158,6 +162,8 @@ pub(in crate::core) struct ComposingChunk {
     /// Model conversion of `reading` — this chunk's slice of the live preedit.
     /// Falls back to `reading` when the model yields nothing.
     pub converted: String,
+    /// Model alternatives for this chunk, with `converted` first.
+    pub candidates: Vec<String>,
 }
 
 /// Live conversion state: enabled flag and current converted text

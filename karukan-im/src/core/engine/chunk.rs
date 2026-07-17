@@ -84,6 +84,59 @@ fn group_chunks(chars: &[char], max: usize) -> Vec<&[char]> {
     out
 }
 
+/// Build whole-buffer candidates by varying one chunk at a time.
+///
+/// The all-top-1 conversion comes first. Alternatives from the chunk under
+/// the cursor are preferred, followed by other chunks from right to left.
+/// This keeps live candidate generation bounded instead of constructing the
+/// Cartesian product of every chunk's alternatives.
+fn assemble_chunk_candidates(
+    chunks: &[ComposingChunk],
+    current_chunk: usize,
+    limit: usize,
+) -> Vec<String> {
+    if chunks.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    let top: String = chunks
+        .iter()
+        .map(|chunk| chunk.converted.as_str())
+        .collect();
+    let mut results = vec![top];
+
+    let current = current_chunk.min(chunks.len() - 1);
+    let mut indices = vec![current];
+    indices.extend((0..chunks.len()).rev().filter(|index| *index != current));
+
+    for index in indices {
+        for alternative in &chunks[index].candidates {
+            if alternative == &chunks[index].converted {
+                continue;
+            }
+            let candidate: String = chunks
+                .iter()
+                .enumerate()
+                .map(|(chunk_index, chunk)| {
+                    if chunk_index == index {
+                        alternative.as_str()
+                    } else {
+                        chunk.converted.as_str()
+                    }
+                })
+                .collect();
+            if !results.contains(&candidate) {
+                results.push(candidate);
+                if results.len() >= limit {
+                    return results;
+                }
+            }
+        }
+    }
+
+    results
+}
+
 /// How to re-chunk the buffer after an edit, derived purely from the previous
 /// chunking and the new text — no engine or model needed (so it is unit
 /// tested directly).
@@ -178,13 +231,13 @@ impl InputMethodEngine {
     /// left context is still the editor surrounding text plus the converted text
     /// of all preceding chunks, truncated to `max_api_context_len`.
     ///
-    /// Returns the concatenated conversion of the whole buffer, or `None` when
-    /// it equals the raw reading (no useful model suggestion).
+    /// Returns up to `live_num_candidates` whole-buffer conversions, or `None`
+    /// when every result equals the raw reading.
     ///
     /// Note: for input no longer than one chunk (the common case, default
     /// N=30) this produces exactly one model call over the whole buffer, i.e.
     /// identical behavior to a whole-buffer conversion.
-    pub(super) fn chunked_auto_suggest(&mut self) -> Option<String> {
+    pub(super) fn chunked_auto_suggest(&mut self) -> Option<Vec<String>> {
         let full_reading = self.input_buf.text.clone();
         if full_reading.is_empty() {
             self.chunks.clear();
@@ -242,7 +295,14 @@ impl InputMethodEngine {
             plan.lead_count, plan.trail_count, reconverted
         );
 
-        (combined != full_reading).then_some(combined)
+        let current_chunk = self.current_chunk_index();
+        let mut candidates = assemble_chunk_candidates(
+            &self.chunks,
+            current_chunk,
+            self.config.live_num_candidates.max(1),
+        );
+        candidates.retain(|candidate| candidate != &full_reading);
+        (!candidates.is_empty()).then_some(candidates)
     }
 
     /// Build one freshly-converted chunk for `reading`, whose left context is
@@ -257,13 +317,21 @@ impl InputMethodEngine {
         base_ctx: &str,
         combined: &str,
     ) -> ComposingChunk {
-        let converted = if reading.chars().next().is_some_and(is_japanese) {
+        let candidates = if reading.chars().next().is_some_and(is_japanese) {
             let lctx = self.lctx_for(base_ctx, combined);
-            self.convert_chunk(&reading, &lctx)
+            self.convert_chunk_candidates(&reading, &lctx)
         } else {
-            reading.clone()
+            vec![reading.clone()]
         };
-        ComposingChunk { reading, converted }
+        let converted = candidates
+            .first()
+            .cloned()
+            .unwrap_or_else(|| reading.clone());
+        ComposingChunk {
+            reading,
+            converted,
+            candidates,
+        }
     }
 
     /// Configured maximum chunk length in chars, clamped to at least 1.
@@ -305,14 +373,19 @@ impl InputMethodEngine {
         }
     }
 
-    /// Model conversion of one chunk's `reading` given `lctx`, falling back to
-    /// the reading itself when the model yields nothing.
-    fn convert_chunk(&mut self, reading: &str, lctx: &str) -> String {
-        self.run_kana_kanji_conversion(reading, lctx, 1)
+    /// Model conversions of one chunk's `reading` given `lctx`, falling back
+    /// to the reading itself when the model yields nothing.
+    fn convert_chunk_candidates(&mut self, reading: &str, lctx: &str) -> Vec<String> {
+        let mut candidates: Vec<String> = self
+            .run_kana_kanji_conversion(reading, lctx, self.config.live_num_candidates.max(1))
             .into_iter()
-            .next()
             .map(|candidate| candidate.text)
-            .unwrap_or_else(|| reading.to_string())
+            .collect();
+        candidates.dedup();
+        if candidates.is_empty() {
+            candidates.push(reading.to_string());
+        }
+        candidates
     }
 
     /// Index of the chunk the cursor currently sits in, found by walking the
@@ -429,6 +502,55 @@ mod group_chunk_tests {
             split("スーパー・マーケット", 40),
             vec!["スーパー", "・", "マーケット"]
         );
+    }
+}
+
+#[cfg(test)]
+mod candidate_tests {
+    use super::{ComposingChunk, assemble_chunk_candidates};
+
+    fn chunk(reading: &str, converted: &str, candidates: &[&str]) -> ComposingChunk {
+        ComposingChunk {
+            reading: reading.to_string(),
+            converted: converted.to_string(),
+            candidates: candidates
+                .iter()
+                .map(|candidate| candidate.to_string())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn current_chunk_alternatives_are_preferred() {
+        let chunks = vec![
+            chunk("きょう", "今日", &["今日", "京"]),
+            chunk("は", "は", &["は", "葉", "派"]),
+        ];
+
+        assert_eq!(
+            assemble_chunk_candidates(&chunks, 1, 3),
+            vec!["今日は", "今日葉", "今日派"]
+        );
+    }
+
+    #[test]
+    fn other_chunks_fill_remaining_candidate_slots() {
+        let chunks = vec![
+            chunk("きょう", "今日", &["今日", "京"]),
+            chunk("は", "は", &["は", "葉"]),
+        ];
+
+        assert_eq!(
+            assemble_chunk_candidates(&chunks, 1, 3),
+            vec!["今日は", "今日葉", "京は"]
+        );
+    }
+
+    #[test]
+    fn candidate_assembly_respects_limit_and_deduplicates() {
+        let chunks = vec![chunk("きょう", "今日", &["今日", "今日", "京", "強"])];
+
+        assert_eq!(assemble_chunk_candidates(&chunks, 0, 2), vec!["今日", "京"]);
     }
 }
 
