@@ -232,7 +232,8 @@ impl InputMethodEngine {
                             cand.surface.clone(),
                             CandidateSource::UserDictionary,
                         )
-                        .with_raw_score(Some(cand.score)),
+                        .with_raw_score(Some(cand.score))
+                        .with_description(cand.description.clone()),
                     );
                 }
             }
@@ -251,7 +252,8 @@ impl InputMethodEngine {
                 if seen.insert(cand.surface.clone()) {
                     candidates.push(
                         ConversionCandidate::new(cand.surface, CandidateSource::Dictionary)
-                            .with_raw_score(Some(cand.score)),
+                            .with_raw_score(Some(cand.score))
+                            .with_description(cand.description),
                     );
                 }
             }
@@ -481,7 +483,7 @@ impl InputMethodEngine {
                 text: ac.text,
                 reading: Some(reading.to_string()),
                 source_label: Some(ac.source.label().to_string()),
-                description: None,
+                description: ac.description,
             })
             .collect()
     }

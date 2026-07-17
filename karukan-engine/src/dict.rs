@@ -19,20 +19,121 @@ pub enum DictError {
 }
 
 type Result<T> = std::result::Result<T, DictError>;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use yada::DoubleArray;
 use yada::builder::DoubleArrayBuilder;
 
 use crate::kana::katakana_to_hiragana;
 
 const MAGIC: &[u8; 4] = b"KRKN";
-const VERSION: u32 = 1;
+const VERSION_V1: u32 = 1;
+const VERSION: u32 = 2;
 
-/// A candidate surface form with its score.
+/// Origin of a dictionary candidate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u8)]
+pub enum DictionarySource {
+    #[default]
+    Legacy = 0,
+    Mozc = 1,
+    Sudachi = 2,
+    JMdict = 3,
+    JapanPost = 4,
+    JMnedict = 5,
+    Gsi = 6,
+    Skk = 7,
+    User = 8,
+}
+
+impl DictionarySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Mozc => "mozc",
+            Self::Sudachi => "sudachi",
+            Self::JMdict => "jmdict",
+            Self::JapanPost => "japan_post",
+            Self::JMnedict => "jmnedict",
+            Self::Gsi => "gsi",
+            Self::Skk => "skk",
+            Self::User => "user",
+        }
+    }
+
+    fn from_u8(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::Legacy),
+            1 => Ok(Self::Mozc),
+            2 => Ok(Self::Sudachi),
+            3 => Ok(Self::JMdict),
+            4 => Ok(Self::JapanPost),
+            5 => Ok(Self::JMnedict),
+            6 => Ok(Self::Gsi),
+            7 => Ok(Self::Skk),
+            8 => Ok(Self::User),
+            _ => Err(DictError::Format(format!(
+                "unknown dictionary source: {value}"
+            ))),
+        }
+    }
+}
+
+/// Semantic category used for ranking and candidate descriptions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u8)]
+pub enum DictionaryCategory {
+    #[default]
+    General = 0,
+    Idiom = 1,
+    Address = 2,
+    Place = 3,
+    Station = 4,
+    NaturalFeature = 5,
+    Person = 6,
+    Organization = 7,
+}
+
+impl DictionaryCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Idiom => "idiom",
+            Self::Address => "address",
+            Self::Place => "place",
+            Self::Station => "station",
+            Self::NaturalFeature => "natural_feature",
+            Self::Person => "person",
+            Self::Organization => "organization",
+        }
+    }
+
+    fn from_u8(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::General),
+            1 => Ok(Self::Idiom),
+            2 => Ok(Self::Address),
+            3 => Ok(Self::Place),
+            4 => Ok(Self::Station),
+            5 => Ok(Self::NaturalFeature),
+            6 => Ok(Self::Person),
+            7 => Ok(Self::Organization),
+            _ => Err(DictError::Format(format!(
+                "unknown dictionary category: {value}"
+            ))),
+        }
+    }
+}
+
+/// A candidate surface form with ranking metadata.
 #[derive(Debug, Clone)]
 pub struct Candidate {
     pub surface: String,
     pub score: f32,
+    pub source: DictionarySource,
+    pub category: DictionaryCategory,
+    pub description: Option<String>,
 }
 
 /// A dictionary entry mapping a reading to its candidate surfaces.
@@ -60,6 +161,12 @@ pub struct Dictionary {
 struct JsonCandidate {
     surface: String,
     score: f32,
+    #[serde(default)]
+    source: DictionarySource,
+    #[serde(default)]
+    category: DictionaryCategory,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +217,9 @@ impl Dictionary {
                         .map(|jc| Candidate {
                             surface: jc.surface,
                             score: jc.score,
+                            source: jc.source,
+                            category: jc.category,
+                            description: jc.description,
                         })
                         .collect();
                     cands.sort_by(|a, b| a.score.total_cmp(&b.score));
@@ -132,7 +242,7 @@ impl Dictionary {
     /// Format:
     /// ```text
     /// [4B] magic "KRKN"
-    /// [4B] version (1u32 LE)
+    /// [4B] version (2u32 LE)
     /// [4B] trie_len (u32 LE)
     /// [trie_len B] trie bytes
     /// [4B] num_entries (u32 LE)
@@ -144,6 +254,10 @@ impl Dictionary {
     ///     [2B] surface_len (u16 LE)
     ///     [surface_len B] surface (UTF-8)
     ///     [4B] score (f32 LE)
+    ///     [1B] source
+    ///     [1B] category
+    ///     [2B] description_len (u16 LE; 0 means absent)
+    ///     [description_len B] description (UTF-8)
     /// ```
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let file = File::create(path.as_ref())?;
@@ -171,6 +285,11 @@ impl Dictionary {
                 w.write_all(&(surface_bytes.len() as u16).to_le_bytes())?;
                 w.write_all(surface_bytes)?;
                 w.write_all(&cand.score.to_le_bytes())?;
+                w.write_all(&[cand.source as u8])?;
+                w.write_all(&[cand.category as u8])?;
+                let description = cand.description.as_deref().unwrap_or_default().as_bytes();
+                w.write_all(&(description.len() as u16).to_le_bytes())?;
+                w.write_all(description)?;
             }
         }
 
@@ -196,7 +315,7 @@ impl Dictionary {
         let mut buf4 = [0u8; 4];
         r.read_exact(&mut buf4)?;
         let version = u32::from_le_bytes(buf4);
-        if version != VERSION {
+        if version != VERSION && version != VERSION_V1 {
             return Err(DictError::Format(format!("unsupported version: {version}")));
         }
 
@@ -249,7 +368,34 @@ impl Dictionary {
 
                 r.read_exact(&mut buf4)?;
                 let score = f32::from_le_bytes(buf4);
-                candidates.push(Candidate { surface, score });
+                let (source, category, description) = if version == VERSION_V1 {
+                    (DictionarySource::Legacy, DictionaryCategory::General, None)
+                } else {
+                    let mut byte = [0u8; 1];
+                    r.read_exact(&mut byte)?;
+                    let source = DictionarySource::from_u8(byte[0])?;
+                    r.read_exact(&mut byte)?;
+                    let category = DictionaryCategory::from_u8(byte[0])?;
+                    r.read_exact(&mut buf2)?;
+                    let description_len = u16::from_le_bytes(buf2) as usize;
+                    let mut description_bytes = vec![0u8; description_len];
+                    r.read_exact(&mut description_bytes)?;
+                    let description = if description_bytes.is_empty() {
+                        None
+                    } else {
+                        Some(String::from_utf8(description_bytes).map_err(|e| {
+                            DictError::Format(format!("invalid UTF-8 in description: {e}"))
+                        })?)
+                    };
+                    (source, category, description)
+                };
+                candidates.push(Candidate {
+                    surface,
+                    score,
+                    source,
+                    category,
+                    description,
+                });
             }
 
             candidates.sort_by(|a, b| a.score.total_cmp(&b.score));
@@ -291,15 +437,21 @@ impl Dictionary {
 
     /// Write all entries in the dictionary to `writer` (for inspection/debugging).
     ///
-    /// Each line is tab-separated: `reading\tsurface\tscore`.
+    /// Each line is tab-separated:
+    /// `reading\tsurface\tscore\tsource\tcategory\tdescription`.
     /// Returns the total number of entries written.
     pub fn dump_all(&self, writer: &mut dyn std::io::Write) -> std::io::Result<usize> {
         for entry in &self.entries {
             for cand in &entry.candidates {
                 writeln!(
                     writer,
-                    "{}\t{}\t{}",
-                    entry.reading, cand.surface, cand.score
+                    "{}\t{}\t{}\t{}\t{}\t{}",
+                    entry.reading,
+                    cand.surface,
+                    cand.score,
+                    cand.source.as_str(),
+                    cand.category.as_str(),
+                    cand.description.as_deref().unwrap_or_default()
                 )?;
             }
         }
@@ -374,6 +526,9 @@ impl Dictionary {
                         .map(|surface| Candidate {
                             surface,
                             score: 0.0,
+                            source: DictionarySource::Mozc,
+                            category: DictionaryCategory::General,
+                            description: None,
                         })
                         .collect(),
                 })
@@ -610,7 +765,13 @@ mod tests {
             {
                 "reading": "キョウト",
                 "candidates": [
-                    {"surface": "京都", "score": 2.0}
+                    {
+                        "surface": "京都",
+                        "score": 2.0,
+                        "source": "japan_post",
+                        "category": "place",
+                        "description": "京都府"
+                    }
                 ]
             },
             {
@@ -685,6 +846,47 @@ mod tests {
 
         let results = loaded.common_prefix_search("きょうと");
         assert_eq!(results.len(), 2);
+
+        let kyoto = loaded.exact_match_search("きょうと").unwrap();
+        assert_eq!(kyoto.candidates[0].source, DictionarySource::JapanPost);
+        assert_eq!(kyoto.candidates[0].category, DictionaryCategory::Place);
+        assert_eq!(kyoto.candidates[0].description.as_deref(), Some("京都府"));
+    }
+
+    #[test]
+    fn test_load_v1_defaults_metadata() {
+        let json_file = create_test_json();
+        let dict = Dictionary::build_from_json(json_file.path()).unwrap();
+        let bin_file = NamedTempFile::new().unwrap();
+        let mut w = BufWriter::new(File::create(bin_file.path()).unwrap());
+
+        w.write_all(MAGIC).unwrap();
+        w.write_all(&VERSION_V1.to_le_bytes()).unwrap();
+        w.write_all(&(dict.trie.0.len() as u32).to_le_bytes())
+            .unwrap();
+        w.write_all(&dict.trie.0).unwrap();
+        w.write_all(&(dict.entries.len() as u32).to_le_bytes())
+            .unwrap();
+        for entry in &dict.entries {
+            w.write_all(&(entry.reading.len() as u16).to_le_bytes())
+                .unwrap();
+            w.write_all(entry.reading.as_bytes()).unwrap();
+            w.write_all(&(entry.candidates.len() as u16).to_le_bytes())
+                .unwrap();
+            for candidate in &entry.candidates {
+                w.write_all(&(candidate.surface.len() as u16).to_le_bytes())
+                    .unwrap();
+                w.write_all(candidate.surface.as_bytes()).unwrap();
+                w.write_all(&candidate.score.to_le_bytes()).unwrap();
+            }
+        }
+        w.flush().unwrap();
+
+        let loaded = Dictionary::load(bin_file.path()).unwrap();
+        let candidate = &loaded.exact_match_search("きょうと").unwrap().candidates[0];
+        assert_eq!(candidate.source, DictionarySource::Legacy);
+        assert_eq!(candidate.category, DictionaryCategory::General);
+        assert_eq!(candidate.description, None);
     }
 
     #[test]
