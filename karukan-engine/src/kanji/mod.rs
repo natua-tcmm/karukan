@@ -12,6 +12,7 @@ pub use backend::{
 pub use error::KanjiError;
 pub use hf_download::{
     download_gguf, get_path_by_id, get_tokenizer_path, get_tokenizer_path_by_id, get_variant_path,
+    prefetch_model,
 };
 pub use llama_cpp_2::token::LlamaToken;
 pub use llamacpp::{LlamaCppModel, NllScorer};

@@ -94,11 +94,7 @@ impl InputMethodEngine {
         };
         let katakana = karukan_engine::hiragana_to_katakana(reading);
         let model_name = converter.model_display_name().to_string();
-        let candidate_count = if num_candidates <= 1 {
-            1
-        } else {
-            num_candidates.min(self.config.beam_width)
-        };
+        let candidate_count = num_candidates.max(1);
         debug!(
             "convert: reading=\"{}\" api_context=\"{}\" candidates={}",
             reading, api_context, candidate_count
@@ -134,7 +130,7 @@ impl InputMethodEngine {
 
         // Save auto-suggest/live conversion result before clearing state.
         // This ensures the candidate that was displayed during input is preserved
-        // in the conversion candidate list even if the re-inference uses a different strategy.
+        // in the conversion candidate list even if re-inference produces another result.
         let prev_suggest_text = std::mem::take(&mut self.live.text);
 
         self.converters.romaji.reset();
@@ -148,8 +144,7 @@ impl InputMethodEngine {
         let mut candidates =
             self.build_conversion_candidates(&reading, self.config.num_candidates, skip_learning);
 
-        // If the previous auto-suggest result is not in the new candidates, insert it at the top
-        // so it doesn't disappear when the conversion strategy changes.
+        // If the previous auto-suggest result is not in the new candidates, insert it at the top.
         let seen: HashSet<&str> = candidates.iter().map(|c| c.text.as_str()).collect();
         if !prev_suggest_text.is_empty()
             && prev_suggest_text != reading

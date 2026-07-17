@@ -122,13 +122,13 @@ pub fn resolve_variant_id(model: Option<&str>) -> anyhow::Result<String> {
 pub struct InputMethodEngine {
     /// Current input state
     state: InputState,
-    /// Converters (romaji, kanji, light kanji)
+    /// Converters (romaji, kana-kanji, rewriters)
     converters: Converters,
     /// Surrounding text context from the editor (text around cursor)
     surrounding_context: Option<SurroundingContext>,
     /// Engine configuration
     config: EngineConfig,
-    /// Conversion timing and adaptive model metrics
+    /// Conversion timing and model metrics
     metrics: ConversionMetrics,
     /// Current input mode (Hiragana, Katakana, or Alphabet)
     input_mode: InputMode,

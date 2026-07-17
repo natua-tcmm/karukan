@@ -76,8 +76,6 @@ pub struct EngineConfig {
     /// live-conversion latency stays bounded for long input. See
     /// [`ComposingChunk`] and `chunked_auto_suggest`.
     pub composing_chunk_len: usize,
-    /// Maximum beam width for explicit conversion
-    pub beam_width: usize,
     /// Whether live conversion is enabled at engine startup
     pub live_conversion: bool,
 }
@@ -95,7 +93,6 @@ impl EngineConfig {
                 0
             },
             composing_chunk_len: settings.conversion.composing_chunk_len,
-            beam_width: settings.conversion.beam_width,
             live_conversion: settings.conversion.live_conversion,
         }
     }
@@ -104,11 +101,10 @@ impl EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            num_candidates: 3, // Space conversion: beam search with 3 candidates
+            num_candidates: 9,
             display_context_len: 10,
             max_api_context_len: 10,
             composing_chunk_len: 30,
-            beam_width: 3,
             live_conversion: false,
         }
     }

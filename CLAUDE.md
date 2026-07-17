@@ -132,7 +132,7 @@ cargo clippy --workspace  # Lint all crates
 
 - `core/engine/` — IMEEngine state machine (Empty → Composing → Conversion)
   - `mod.rs` — Main InputMethodEngine struct and core processing logic
-  - `types.rs` — EngineConfig, EngineResult, EngineAction, Converters, ConversionStrategy
+  - `types.rs` — EngineConfig, EngineResult, EngineAction, Converters
   - `input.rs` — Key input handling for Composing state
   - `input_buffer.rs` — Input buffer (hiragana text + cursor position)
   - `conversion.rs` — Conversion mode handling (candidate building, commit)
@@ -141,7 +141,6 @@ cargo clippy --workspace  # Lint all crates
   - `display.rs` — Preedit text display
   - `mode.rs` — Mode switching (katakana, alphabet, live conversion)
   - `init.rs` — Model loading, dictionary setup, learning cache init
-  - `strategy.rs` — Conversion strategy determination and adaptive model selection
   - `tests.rs` — Engine unit tests
 - `core/preedit.rs` — Preedit composition with cursor support
 - `core/candidate.rs` — Candidate list with pagination support

@@ -6,13 +6,22 @@
 //! frontend should close the child's stdin (or send `save_learning`) before
 //! terminating it.
 //!
-//! `--prefetch-models` downloads every conversion model listed in
-//! `models.toml` into the HuggingFace cache and exits (used by `make install`
-//! to avoid a multi-minute download on first launch).
+//! `--prefetch-models` downloads the configured conversion model into the
+//! HuggingFace cache and exits (used by `make install` to avoid a multi-minute
+//! download on first launch).
 
 use std::io::{BufRead, Write};
 
+use karukan_im::config::Settings;
+use karukan_im::core::engine::resolve_variant_id;
 use karukan_im::server::ImServer;
+
+fn prefetch_configured_model() -> anyhow::Result<()> {
+    let settings = Settings::load()?;
+    let variant_id = resolve_variant_id(settings.conversion.model.as_deref())?;
+    karukan_engine::kanji::hf_download::prefetch_model(&variant_id)?;
+    Ok(())
+}
 
 fn main() {
     tracing_subscriber::fmt()
@@ -24,7 +33,7 @@ fn main() {
         .init();
 
     if std::env::args().any(|arg| arg == "--prefetch-models") {
-        if let Err(e) = karukan_engine::kanji::hf_download::prefetch_all_models() {
+        if let Err(e) = prefetch_configured_model() {
             tracing::error!("model prefetch failed: {e}");
             std::process::exit(1);
         }

@@ -23,24 +23,9 @@ pub struct Settings {
     pub learning: LearningSettings,
 }
 
-/// Conversion strategy mode
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum StrategyMode {
-    /// Adaptive: dynamically switch between main and light models based on latency
-    #[default]
-    Adaptive,
-    /// Light: use light_model only (loaded into main slot, beam search on Space)
-    Light,
-    /// Main: use main model only (no light model loaded)
-    Main,
-}
-
 /// Conversion-related settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionSettings {
-    /// Conversion strategy mode (adaptive, light, main)
-    pub strategy: StrategyMode,
     /// Number of candidates to show on Space conversion
     pub num_candidates: usize,
     /// Use surrounding text (text left of cursor) as context for conversion
@@ -57,15 +42,6 @@ pub struct ConversionSettings {
     pub dict_path: Option<String>,
     /// Model variant id (optional, defaults to registry default)
     pub model: Option<String>,
-    /// Beam search model variant id (used on Space conversion, default model if unset)
-    pub light_model: Option<String>,
-    /// Token count threshold for beam search (at or below → beam, above → greedy)
-    pub short_input_threshold: usize,
-    /// Beam width for short input
-    pub beam_width: usize,
-    /// Maximum acceptable latency in milliseconds for auto-suggest (0 = disabled)
-    /// When a main model conversion exceeds this, the engine adaptively switches to light_model
-    pub max_latency_ms: u64,
     /// Number of threads for llama.cpp inference (0 = all cores, llama.cpp default)
     pub n_threads: u32,
     /// Enable live conversion at startup
@@ -105,10 +81,36 @@ fn merge_toml(base: &mut toml::Value, overlay: &toml::Value) {
     }
 }
 
+const DEPRECATED_CONVERSION_KEYS: &[&str] = &[
+    "strategy",
+    "light_model",
+    "short_input_threshold",
+    "beam_width",
+    "max_latency_ms",
+];
+
+fn warn_deprecated_conversion_keys(user: &toml::Value) {
+    let Some(conversion) = user.get("conversion").and_then(toml::Value::as_table) else {
+        return;
+    };
+    let deprecated: Vec<_> = DEPRECATED_CONVERSION_KEYS
+        .iter()
+        .copied()
+        .filter(|key| conversion.contains_key(*key))
+        .collect();
+    if !deprecated.is_empty() {
+        warn!(
+            "Ignoring deprecated conversion settings: {}",
+            deprecated.join(", ")
+        );
+    }
+}
+
 /// Parse user TOML content merged on top of default.toml.
 fn parse_with_defaults(user_content: &str) -> Result<Settings> {
     let mut base: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML)?;
     let user: toml::Value = toml::from_str(user_content)?;
+    warn_deprecated_conversion_keys(&user);
     merge_toml(&mut base, &user);
     let settings: Settings = base.try_into()?;
     Ok(settings)
@@ -277,54 +279,29 @@ num_candidates = 3
     }
 
     #[test]
-    fn test_strategy_default_when_unspecified() {
-        // When strategy is not specified, it should default to Adaptive
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(
-            file,
-            r#"
-[conversion]
-num_candidates = 5
-"#
-        )
-        .unwrap();
-
-        let path = file.path().to_path_buf();
-        let settings = Settings::load_from(&path).unwrap();
-        assert_eq!(settings.conversion.strategy, StrategyMode::Adaptive);
-    }
-
-    #[test]
-    fn test_strategy_light() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(
-            file,
+    fn test_deprecated_conversion_settings_are_ignored() {
+        let settings = parse_with_defaults(
             r#"
 [conversion]
 strategy = "light"
-"#
+light_model = "jinen-v1-xsmall-q5"
+short_input_threshold = 5
+beam_width = 2
+max_latency_ms = 50
+model = "jinen-v1-xsmall-q5"
+"#,
         )
         .unwrap();
 
-        let path = file.path().to_path_buf();
-        let settings = Settings::load_from(&path).unwrap();
-        assert_eq!(settings.conversion.strategy, StrategyMode::Light);
-    }
+        assert_eq!(
+            settings.conversion.model.as_deref(),
+            Some("jinen-v1-xsmall-q5")
+        );
+        assert_eq!(settings.conversion.num_candidates, 9);
 
-    #[test]
-    fn test_strategy_main() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(
-            file,
-            r#"
-[conversion]
-strategy = "main"
-"#
-        )
-        .unwrap();
-
-        let path = file.path().to_path_buf();
-        let settings = Settings::load_from(&path).unwrap();
-        assert_eq!(settings.conversion.strategy, StrategyMode::Main);
+        let serialized = toml::to_string(&settings).unwrap();
+        for key in DEPRECATED_CONVERSION_KEYS {
+            assert!(!serialized.contains(key));
+        }
     }
 }
