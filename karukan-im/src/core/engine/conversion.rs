@@ -202,8 +202,10 @@ impl InputMethodEngine {
         );
 
         self.state = InputState::Conversion {
-            preedit: preedit.clone(),
-            candidates: candidates.clone(),
+            session: crate::core::state::ConversionSession::single(
+                reading.to_string(),
+                candidates.clone(),
+            ),
         };
 
         EngineResult::consumed()
@@ -714,9 +716,13 @@ impl InputMethodEngine {
     /// Get selected text and reading from conversion state, or None if not in conversion
     fn selected_conversion_info(&self) -> Option<(String, Option<String>)> {
         match &self.state {
-            InputState::Conversion { candidates, .. } => {
-                let text = candidates.selected_text().unwrap_or("").to_string();
-                let reading = candidates.selected().and_then(|c| c.reading.clone());
+            InputState::Conversion { session } => {
+                let text = session.selected_text();
+                let reading = session
+                    .active()
+                    .and_then(|segment| segment.candidates.selected())
+                    .and_then(|candidate| candidate.reading.clone())
+                    .or_else(|| Some(session.reading.clone()));
                 Some((text, reading))
             }
             _ => None,

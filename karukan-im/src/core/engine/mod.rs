@@ -543,9 +543,9 @@ impl InputMethodEngine {
                 self.surrounding_context = None;
                 text
             }
-            InputState::Conversion { candidates, .. } => {
-                let text = candidates.selected_text().unwrap_or("").to_string();
-                let reading = candidates.selected().and_then(|c| c.reading.clone());
+            InputState::Conversion { session } => {
+                let text = session.selected_text();
+                let reading = Some(session.reading.clone());
                 // Record conversion result in learning cache
                 if let Some(reading) = &reading {
                     self.record_learning(reading, &text);
