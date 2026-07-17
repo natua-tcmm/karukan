@@ -16,7 +16,6 @@ mod live_conversion;
 mod mode_toggle;
 mod passthrough;
 mod rewriter;
-mod strategy;
 mod surrounding;
 
 fn press(ch: char) -> KeyEvent {

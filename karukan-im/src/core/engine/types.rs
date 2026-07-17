@@ -2,8 +2,6 @@
 
 use karukan_engine::{Dictionary, KanaKanjiConverter, RewriterChain, RomajiConverter};
 
-use crate::config::settings::StrategyMode;
-
 use super::super::candidate::CandidateList;
 use super::super::preedit::Preedit;
 
@@ -78,15 +76,8 @@ pub struct EngineConfig {
     /// live-conversion latency stays bounded for long input. See
     /// [`ComposingChunk`] and `chunked_auto_suggest`.
     pub composing_chunk_len: usize,
-    /// Token count threshold for beam search (at or below → beam, above → greedy)
-    pub short_input_threshold: usize,
-    /// Beam width for short input
+    /// Maximum beam width for explicit conversion
     pub beam_width: usize,
-    /// Maximum acceptable latency in milliseconds for auto-suggest (0 = disabled)
-    /// When a main model conversion exceeds this, the engine adaptively switches to light_model
-    pub max_latency_ms: u64,
-    /// Conversion strategy mode (adaptive, light, main)
-    pub strategy: StrategyMode,
     /// Whether live conversion is enabled at engine startup
     pub live_conversion: bool,
 }
@@ -104,10 +95,7 @@ impl EngineConfig {
                 0
             },
             composing_chunk_len: settings.conversion.composing_chunk_len,
-            short_input_threshold: settings.conversion.short_input_threshold,
             beam_width: settings.conversion.beam_width,
-            max_latency_ms: settings.conversion.max_latency_ms,
-            strategy: settings.conversion.strategy,
             live_conversion: settings.conversion.live_conversion,
         }
     }
@@ -120,23 +108,18 @@ impl Default for EngineConfig {
             display_context_len: 10,
             max_api_context_len: 10,
             composing_chunk_len: 30,
-            short_input_threshold: 10,
             beam_width: 3,
-            max_latency_ms: 100,
-            strategy: StrategyMode::default(),
             live_conversion: false,
         }
     }
 }
 
-/// Converter bundle: romaji → hiragana, kana → kanji (main + light)
+/// Converter bundle: romaji → hiragana and kana → kanji
 pub(in crate::core) struct Converters {
     /// Romaji to hiragana converter
     pub romaji: RomajiConverter,
     /// Kanji converter (lazy loaded)
     pub kanji: Option<KanaKanjiConverter>,
-    /// Light model for beam search
-    pub light_kanji: Option<KanaKanjiConverter>,
     /// Candidate rewriters (half-width katakana, symbol variants)
     pub rewriters: RewriterChain,
 }
@@ -208,20 +191,7 @@ pub(in crate::core) struct Dictionaries {
     pub user: Option<Dictionary>,
 }
 
-/// Conversion model dispatch strategy based on input length
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::core) enum ConversionStrategy {
-    /// Short input: main model greedy + light model beam search (parallel)
-    ParallelBeam { beam_width: usize },
-    /// Long input: light model greedy only (skip slow main model)
-    LightModelOnly,
-    /// No light model: main model greedy only
-    MainModelOnly,
-    /// Main model beam search (used in Light strategy mode where light model occupies main slot)
-    MainModelBeam { beam_width: usize },
-}
-
-/// Timing and adaptive model selection metrics for conversion
+/// Timing and model information for conversion
 #[derive(Debug, Clone, Default)]
 pub(in crate::core) struct ConversionMetrics {
     /// Conversion time of the current call in milliseconds (inference only);
@@ -232,7 +202,4 @@ pub(in crate::core) struct ConversionMetrics {
     pub process_key_ms: u64,
     /// Display name of the model used for the last conversion
     pub model_name: String,
-    /// Adaptive flag: set when the main model exceeded max_latency_ms
-    /// Reset when a new word begins (Empty state)
-    pub adaptive_use_light_model: bool,
 }

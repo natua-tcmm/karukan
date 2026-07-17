@@ -10,7 +10,6 @@ mod display;
 mod init;
 mod input;
 mod input_buffer;
-mod strategy;
 mod types;
 
 pub use types::*;
@@ -172,7 +171,6 @@ impl InputMethodEngine {
             converters: Converters {
                 romaji: RomajiConverter::new(),
                 kanji: None,
-                light_kanji: None,
                 rewriters: RewriterChain::default_chain(),
             },
             surrounding_context: None,
@@ -213,21 +211,11 @@ impl InputMethodEngine {
 
     /// Get the model name being used
     pub fn model_name(&self) -> String {
-        let main = self
-            .converters
+        self.converters
             .kanji
             .as_ref()
-            .map(|c| c.model_display_name());
-        let sub = self
-            .converters
-            .light_kanji
-            .as_ref()
-            .map(|c| c.model_display_name());
-        match (main, sub) {
-            (Some(m), Some(s)) => format!("{}+{}", m, s),
-            (Some(m), None) => m.to_string(),
-            _ => "unknown".to_string(),
-        }
+            .map(|c| c.model_display_name().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
     }
 
     /// Get the current state
@@ -485,11 +473,6 @@ impl InputMethodEngine {
         // Only process key presses
         if !key.is_press {
             return EngineResult::not_consumed();
-        }
-
-        // Reset adaptive model flag when starting a new word (first key in Empty state)
-        if matches!(self.state, InputState::Empty) {
-            self.metrics.adaptive_use_light_model = false;
         }
 
         trace!(

@@ -69,8 +69,8 @@ impl CandidateBuilder {
 impl InputMethodEngine {
     /// Run kana-kanji conversion for a reading via llama.cpp model.
     ///
-    /// Determines the conversion strategy (main model, light model, or parallel beam),
-    /// dispatches to the appropriate model(s), measures latency, and records which model was used.
+    /// Uses the configured model for both live and explicit conversion, measures
+    /// latency, and records which model was used.
     ///
     /// Skips the model entirely when the reading has no hiragana/katakana — the
     /// model is trained on kana → kanji and hallucinates garbage (e.g. `「` → `w`)
@@ -93,79 +93,24 @@ impl InputMethodEngine {
             return vec![];
         };
         let katakana = karukan_engine::hiragana_to_katakana(reading);
-        let main_model_name = converter.model_display_name().to_string();
-
-        let strategy = self.determine_strategy(reading, num_candidates);
+        let model_name = converter.model_display_name().to_string();
+        let candidate_count = if num_candidates <= 1 {
+            1
+        } else {
+            num_candidates.min(self.config.beam_width)
+        };
         debug!(
-            "convert: reading=\"{}\" api_context=\"{}\" candidates={} strategy={:?}",
-            reading, api_context, num_candidates, strategy
+            "convert: reading=\"{}\" api_context=\"{}\" candidates={}",
+            reading, api_context, candidate_count
         );
 
         let start = Instant::now();
-
-        let candidates = match &strategy {
-            ConversionStrategy::ParallelBeam { beam_width } => {
-                let Some(light_converter) = self.converters.light_kanji.as_ref() else {
-                    return vec![];
-                };
-                let bw = *beam_width;
-                let (default_top1, light_candidates) = std::thread::scope(|s| {
-                    let h_default = s.spawn(|| {
-                        converter
-                            .convert(&katakana, api_context, 1)
-                            .unwrap_or_default()
-                    });
-                    let h_beam = s.spawn(|| {
-                        light_converter
-                            .convert(&katakana, api_context, bw)
-                            .unwrap_or_default()
-                    });
-                    (
-                        h_default.join().unwrap_or_default(),
-                        h_beam.join().unwrap_or_default(),
-                    )
-                });
-                Self::merge_candidates_dedup(default_top1, light_candidates, bw)
-            }
-            ConversionStrategy::LightModelOnly => {
-                let Some(light_converter) = self.converters.light_kanji.as_ref() else {
-                    return vec![];
-                };
-                light_converter
-                    .convert(&katakana, api_context, 1)
-                    .unwrap_or_default()
-            }
-            ConversionStrategy::MainModelOnly => converter
-                .convert(&katakana, api_context, 1)
-                .unwrap_or_default(),
-            ConversionStrategy::MainModelBeam { beam_width } => converter
-                .convert(&katakana, api_context, *beam_width)
-                .unwrap_or_default(),
-        };
+        let candidates = converter
+            .convert(&katakana, api_context, candidate_count)
+            .unwrap_or_default();
 
         self.metrics.conversion_ms = start.elapsed().as_millis() as u64;
-        self.update_adaptive_model_flag(&strategy);
-
-        self.metrics.model_name = match &strategy {
-            ConversionStrategy::ParallelBeam { .. } => {
-                let light_name = self
-                    .converters
-                    .light_kanji
-                    .as_ref()
-                    .map(|c| c.model_display_name().to_string())
-                    .unwrap_or_default();
-                format!("{}+{}", main_model_name, light_name)
-            }
-            ConversionStrategy::LightModelOnly => self
-                .converters
-                .light_kanji
-                .as_ref()
-                .map(|c| c.model_display_name().to_string())
-                .unwrap_or(main_model_name),
-            ConversionStrategy::MainModelOnly | ConversionStrategy::MainModelBeam { .. } => {
-                main_model_name
-            }
-        };
+        self.metrics.model_name = model_name;
 
         candidates
     }
@@ -554,22 +499,6 @@ impl InputMethodEngine {
                 source_label: Some(source_label.clone()),
                 description,
             })
-            .collect()
-    }
-
-    /// Merge two candidate lists with deduplication
-    /// Primary candidates come first, then secondary candidates that aren't duplicates
-    pub(super) fn merge_candidates_dedup(
-        primary: Vec<String>,
-        secondary: Vec<String>,
-        max_candidates: usize,
-    ) -> Vec<String> {
-        let mut seen = HashSet::new();
-        primary
-            .into_iter()
-            .chain(secondary)
-            .filter(|c| seen.insert(c.clone()))
-            .take(max_candidates)
             .collect()
     }
 
