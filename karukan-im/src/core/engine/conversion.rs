@@ -766,6 +766,8 @@ impl InputMethodEngine {
         match key.keysym {
             Keysym::RETURN => self.commit_conversion(),
             Keysym::ESCAPE => self.cancel_conversion(),
+            Keysym::LEFT if !key.modifiers.shift_key => self.move_conversion_segment(false),
+            Keysym::RIGHT if !key.modifiers.shift_key => self.move_conversion_segment(true),
             Keysym::SPACE | Keysym::DOWN | Keysym::TAB => self.next_candidate(),
             Keysym::UP => self.prev_candidate(),
             Keysym::PAGE_DOWN => self.next_candidate_page(),
@@ -797,6 +799,21 @@ impl InputMethodEngine {
                 EngineResult::not_consumed()
             }
         }
+    }
+
+    fn move_conversion_segment(&mut self, right: bool) -> EngineResult {
+        let candidates = {
+            let InputState::Conversion { session } = &mut self.state else {
+                return EngineResult::not_consumed();
+            };
+            if right {
+                session.move_active_right();
+            } else {
+                session.move_active_left();
+            }
+            session.candidates().cloned().unwrap_or_default()
+        };
+        self.update_conversion_preedit(&candidates)
     }
 
     /// Get selected text and reading from conversion state, or None if not in conversion

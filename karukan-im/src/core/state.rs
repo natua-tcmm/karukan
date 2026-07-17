@@ -97,7 +97,26 @@ impl ConversionSession {
             .collect()
     }
 
+    pub fn move_active_left(&mut self) -> bool {
+        if self.active_segment == 0 {
+            return false;
+        }
+        self.active_segment -= 1;
+        self.rebuild_preedit();
+        true
+    }
+
+    pub fn move_active_right(&mut self) -> bool {
+        if self.active_segment + 1 >= self.segments.len() {
+            return false;
+        }
+        self.active_segment += 1;
+        self.rebuild_preedit();
+        true
+    }
+
     pub fn rebuild_preedit(&mut self) {
+        let mut position = 0;
         let mut caret = 0;
         let segments = self
             .segments
@@ -105,7 +124,10 @@ impl ConversionSession {
             .enumerate()
             .map(|(index, segment)| {
                 let text = segment.selected_text().to_string();
-                caret += text.chars().count();
+                position += text.chars().count();
+                if index == self.active_segment {
+                    caret = position;
+                }
                 PreeditSegment::new(
                     text,
                     if index == self.active_segment {

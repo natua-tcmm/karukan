@@ -147,3 +147,51 @@ fn best_lattice_path_initializes_conversion_segments() {
         AttributeType::Underline
     );
 }
+
+#[test]
+fn left_and_right_move_the_active_conversion_segment() {
+    use crate::core::state::{ConversionSegment, ConversionSession};
+
+    let segments = vec![
+        ConversionSegment {
+            reading_range: 0..3,
+            reading: "きょう".into(),
+            candidates: CandidateList::from_strings_with_reading(["今日", "京"], "きょう"),
+        },
+        ConversionSegment {
+            reading_range: 3..5,
+            reading: "いく".into(),
+            candidates: CandidateList::from_strings_with_reading(["行く", "往く"], "いく"),
+        },
+    ];
+    let mut engine = InputMethodEngine::new();
+    engine.state = InputState::Conversion {
+        session: ConversionSession::segmented("きょういく".into(), segments),
+    };
+
+    let result = engine.process_key(&press_key(Keysym::RIGHT));
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("conversion state expected");
+    };
+    assert_eq!(session.active_segment, 1);
+    assert_eq!(engine.candidates().unwrap().selected_text(), Some("行く"));
+    assert!(result.actions.iter().any(|action| matches!(
+        action,
+        EngineAction::ShowCandidates(candidates)
+            if candidates.selected_text() == Some("行く")
+    )));
+    assert_eq!(
+        session.preedit().attributes()[0].attr_type,
+        AttributeType::Underline
+    );
+    assert_eq!(
+        session.preedit().attributes()[1].attr_type,
+        AttributeType::Highlight
+    );
+
+    engine.process_key(&press_key(Keysym::LEFT));
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("conversion state expected");
+    };
+    assert_eq!(session.active_segment, 0);
+}
