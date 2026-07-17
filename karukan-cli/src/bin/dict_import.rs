@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::Parser;
 use karukan_engine::Dictionary;
 use karukan_engine::dictionary_import::{import_jmdict, import_mozc, import_sudachi};
-use karukan_engine::dictionary_source::{merge_normalized_entries, write_jsonl};
+use karukan_engine::dictionary_source::{merge_normalized_entries, read_jsonl, write_jsonl};
 
 #[derive(Debug, Parser)]
 #[command(name = "karukan-dict-import")]
@@ -17,6 +17,9 @@ struct Cli {
     sudachi: Vec<PathBuf>,
     #[arg(long)]
     jmdict: Vec<PathBuf>,
+    /// Previously normalized JSONL files to merge with the imported sources.
+    #[arg(long)]
+    normalized: Vec<PathBuf>,
     #[arg(short, long, default_value = "general-dictionary.jsonl")]
     output: PathBuf,
     #[arg(long)]
@@ -34,6 +37,9 @@ fn main() -> Result<()> {
     }
     for path in &cli.jmdict {
         entries.extend(import_jmdict(path)?);
+    }
+    for path in &cli.normalized {
+        entries.extend(read_jsonl(path)?);
     }
     let entries = merge_normalized_entries(entries);
     write_jsonl(&cli.output, &entries)?;

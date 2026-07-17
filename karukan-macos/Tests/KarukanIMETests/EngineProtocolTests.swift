@@ -66,7 +66,7 @@ final class EngineProtocolTests: XCTestCase {
             {"protocol_version":2,"model_name":"jinen-v1-small-q5"}
             """
         let result = try makeProtocolDecoder().decode(InitResult.self, from: Data(json.utf8))
-        XCTAssertEqual(result.protocolVersion, 2)
+        XCTAssertEqual(result.protocolVersion, supportedEngineProtocolVersion)
         XCTAssertEqual(result.modelName, "jinen-v1-small-q5")
     }
 

@@ -10,6 +10,8 @@
 
 #include <stdint.h>
 
+#define KARUKAN_FFI_API_VERSION 2
+
 #ifdef __cplusplus
 extern "C" {
 #endif

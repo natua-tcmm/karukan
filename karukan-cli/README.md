@@ -7,6 +7,9 @@ karukan-engineを利用したCLIツール群。かな漢字変換サーバー、
 | バイナリ | 概要 |
 |---------|------|
 | `karukan-dict` | 辞書のビルド（JSON/Mozc TSV → バイナリ）とビューア（Web UI + CLI検索） |
+| `karukan-dict-sources` | バージョン固定された辞書ソースの検証・取得 |
+| `karukan-dict-import` | Mozc・Sudachi・JMdictを共通JSONL/KRKN v2へ正規化 |
+| `karukan-dict-geography` | 日本郵便・JMnedict・国土地理院・SKK地名辞書を正規化 |
 | `sudachi-dict` | Sudachi CSVからJSON辞書を生成 |
 | `karukan-server` | かな漢字変換HTTPサーバー（Web UI付き） |
 | `ajimee-bench` | AJIMEE-Bench評価ツール |
@@ -107,6 +110,54 @@ cargo run --release --bin sudachi-dict -- input.csv --model-scores --model jinen
 | `--n-ctx` | `256` | モデルのコンテキストウィンドウサイズ |
 
 出力JSONは `karukan-dict build` の入力として使用できます。
+
+## 再現可能なシステム辞書
+
+リポジトリ直下の`dictionary-sources.toml`に、各ソースのバージョン、URL、SHA-256、ライセンス識別子、優先度、保存ファイル名を固定します。実データや生成物はGitへコミットしません。
+
+```bash
+# マニフェストだけを検証
+cargo run --release --bin karukan-dict-sources -- verify dictionary-sources.toml
+
+# 全ソースを取得し、SHA-256を検証
+cargo run --release --bin karukan-dict-sources -- fetch \
+  dictionary-sources.toml --cache-dir target/dictionary-sources
+```
+
+一般語彙は次のように共通JSONLとKRKN v2へ変換します。オプションは複数回指定でき、入力順が同スコア時の優先順になります。
+
+```bash
+cargo run --release --bin karukan-dict-import -- \
+  --mozc path/to/mozc.tsv \
+  --sudachi path/to/system_core.csv \
+  --jmdict path/to/JMdict_e.xml \
+  --output target/general-dictionary.jsonl \
+  --binary target/general-dict.bin
+```
+
+地名・住所・駅名は別系統で生成できます。
+
+```bash
+cargo run --release --bin karukan-dict-geography -- \
+  --japan-post path/to/utf_ken_all.csv \
+  --jmnedict path/to/JMnedict.xml \
+  --gsi path/to/gsi-place.csv \
+  --skk path/to/SKK-JISYO.geo \
+  --output target/geographic-dictionary.jsonl \
+  --binary target/geographic-dict.bin
+```
+
+最後に、双方の正規化JSONLを統合して配布用辞書を生成します。
+
+```bash
+cargo run --release --bin karukan-dict-import -- \
+  --normalized target/general-dictionary.jsonl \
+  --normalized target/geographic-dictionary.jsonl \
+  --output target/system-dictionary.jsonl \
+  --binary target/dict.bin
+```
+
+配布辞書の生成前には、[辞書ライセンス確認表](../docs/dictionary-licenses.md)と[辞書リリース手順](../docs/dictionary-release.md)を確認してください。
 
 ## karukan-server
 

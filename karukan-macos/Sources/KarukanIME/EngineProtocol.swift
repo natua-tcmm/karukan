@@ -4,6 +4,8 @@ import Foundation
 // All positions (caret, attribute start/end) are in Unicode scalar values;
 // convert to UTF-16 offsets before passing to IMK APIs.
 
+let supportedEngineProtocolVersion = 2
+
 struct KeyResult: Decodable {
     let consumed: Bool
     let actions: [EngineAction]

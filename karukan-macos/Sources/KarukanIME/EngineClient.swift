@@ -38,6 +38,13 @@ class EngineClient {
                 NSLog("KarukanIME: engine init failed")
                 return
             }
+            guard result.protocolVersion == supportedEngineProtocolVersion else {
+                NSLog(
+                    "KarukanIME: incompatible engine protocol v\(result.protocolVersion); expected v\(supportedEngineProtocolVersion)"
+                )
+                self.serverProcess.stop()
+                return
+            }
             self.serverProcess.resetBackoff()
             NSLog(
                 "KarukanIME: engine initialized (protocol v\(result.protocolVersion), model=\(result.modelName))"

@@ -12,6 +12,7 @@ const XKB_KEY_K: u32 = 0x6b;
 const XKB_KEY_RETURN: u32 = 0xff0d;
 const XKB_KEY_ESCAPE: u32 = 0xff1b;
 const XKB_KEY_BACKSPACE: u32 = 0xff08;
+const XKB_KEY_SPACE: u32 = 0x20;
 const XKB_KEY_SHIFT_L: u32 = 0xffe1;
 const XKB_KEY_LOWER_L: u32 = 0x6c;
 const SHIFT_MASK: u32 = karukan_im::core::keycode::KeyModifiers::SHIFT_MASK;
@@ -171,6 +172,24 @@ fn test_commit_composing() {
 }
 
 #[test]
+fn test_candidate_selection_applies_without_committing() {
+    let e = TestEngine::new();
+    disable_live_conversion(&e);
+    e.press(XKB_KEY_K);
+    e.press(XKB_KEY_A);
+    e.press(XKB_KEY_SPACE);
+    assert!(e.has_candidates());
+
+    assert_eq!(karukan_engine_select_candidate(e.ptr(), 0), 1);
+    assert!(!e.has_commit());
+    assert!(e.has_candidates());
+
+    e.press(XKB_KEY_RETURN);
+    assert!(e.has_commit());
+    assert_eq!(karukan_engine_should_hide_candidates(e.ptr()), 1);
+}
+
+#[test]
 fn test_backspace() {
     let e = TestEngine::new();
 
@@ -196,9 +215,10 @@ fn test_escape_cancel() {
     e.press(XKB_KEY_A);
     e.press(XKB_KEY_I);
 
-    // Escape to cancel
+    // Escape is reserved for cancelling explicit conversion. While composing,
+    // it is a no-op so applications may handle it themselves.
     e.press(XKB_KEY_ESCAPE);
-    assert_eq!(e.preedit_len(), 0);
+    assert_eq!(e.preedit(), "あい");
     assert!(!e.has_commit());
 }
 
@@ -260,6 +280,7 @@ fn test_conversion_timing() {
 #[test]
 fn test_surrounding_text_sets_context() {
     let e = TestEngine::new();
+    disable_live_conversion(&e);
 
     // Set surrounding text (simulating editor content)
     // Simulate GTK/Qt: cursor_pos as character offset (10 chars, 30 bytes)
@@ -271,11 +292,7 @@ fn test_surrounding_text_sets_context() {
     // Surrounding text was set, so context is displayed
     e.press(XKB_KEY_A);
 
-    assert!(
-        e.aux().contains("Karukan"),
-        "Aux should contain mode indicator: {}",
-        e.aux()
-    );
+    assert!(e.aux().contains("[あ]"), "Aux: {}", e.aux());
 }
 
 #[test]
@@ -292,6 +309,7 @@ fn test_surrounding_text_null_safety() {
 #[test]
 fn test_surrounding_text_cursor_at_start() {
     let e = TestEngine::new();
+    disable_live_conversion(&e);
 
     // Cursor at start (no left context, only right context)
     let text = std::ffi::CString::new("Hello World").unwrap();
@@ -299,22 +317,16 @@ fn test_surrounding_text_cursor_at_start() {
 
     e.press(XKB_KEY_A);
 
-    // Cursor at start: no left context, right context exists
-    assert!(
-        !e.aux().contains("lctx:"),
-        "Should not contain left context: {}",
-        e.aux()
-    );
-    assert!(
-        e.aux().contains("rctx:"),
-        "Should contain right context: {}",
-        e.aux()
-    );
+    // Context is intentionally not exposed in aux text.
+    assert_eq!(e.preedit(), "あ");
+    assert!(!e.aux().contains("lctx:"));
+    assert!(!e.aux().contains("rctx:"));
 }
 
 #[test]
 fn test_surrounding_text_with_both_contexts() {
     let e = TestEngine::new();
+    disable_live_conversion(&e);
 
     // Cursor in the middle: "左側|右側"
     // Simulate GTK/Qt: character offset (2 chars, 6 bytes)
@@ -325,22 +337,14 @@ fn test_surrounding_text_with_both_contexts() {
 
     e.press(XKB_KEY_A);
 
-    // Both left and right context should be displayed
-    assert!(
-        e.aux().contains("lctx:"),
-        "Should contain left context: {}",
-        e.aux()
-    );
-    assert!(
-        e.aux().contains("左側"),
-        "Left context should contain '左側': {}",
-        e.aux()
-    );
+    assert_eq!(e.preedit(), "あ");
+    assert!(!e.aux().contains("左側"));
 }
 
 #[test]
 fn test_surrounding_text_cursor_at_end() {
     let e = TestEngine::new();
+    disable_live_conversion(&e);
 
     // Cursor at end (only left context)
     // Simulate GTK/Qt: character offset (4 chars, 12 bytes)
@@ -349,27 +353,14 @@ fn test_surrounding_text_cursor_at_end() {
 
     e.press(XKB_KEY_A);
 
-    // Cursor at end: left context exists, no right context
-    assert!(
-        e.aux().contains("lctx:"),
-        "Should contain left context: {}",
-        e.aux()
-    );
-    assert!(
-        e.aux().contains("全部左側"),
-        "Left context should contain '全部左側': {}",
-        e.aux()
-    );
-    assert!(
-        !e.aux().contains("rctx:"),
-        "Should not contain right context: {}",
-        e.aux()
-    );
+    assert_eq!(e.preedit(), "あ");
+    assert!(!e.aux().contains("全部左側"));
 }
 
 #[test]
 fn test_surrounding_text_char_offset_japanese() {
     let e = TestEngine::new();
+    disable_live_conversion(&e);
 
     // cursor_pos is always a character (code point) offset from fcitx5.
     // "あいうえお" = 15 bytes, 5 chars. cursor_pos=5 → end of text.
@@ -378,27 +369,14 @@ fn test_surrounding_text_char_offset_japanese() {
 
     e.press(XKB_KEY_A);
 
-    // Cursor at end: all text is left context
-    assert!(
-        e.aux().contains("lctx:"),
-        "Should contain left context: {}",
-        e.aux()
-    );
-    assert!(
-        e.aux().contains("あいうえお"),
-        "Left context should contain full text: {}",
-        e.aux()
-    );
-    assert!(
-        !e.aux().contains("rctx:"),
-        "Should not contain right context: {}",
-        e.aux()
-    );
+    assert_eq!(e.preedit(), "あ");
+    assert!(!e.aux().contains("あいうえお"));
 }
 
 #[test]
 fn test_surrounding_text_char_offset_middle() {
     let e = TestEngine::new();
+    disable_live_conversion(&e);
 
     // "あいうえお" = 5 chars. cursor_pos=2 → after "あい"
     let text = std::ffi::CString::new("あいうえお").unwrap();
@@ -406,21 +384,9 @@ fn test_surrounding_text_char_offset_middle() {
 
     e.press(XKB_KEY_A);
 
-    assert!(
-        e.aux().contains("lctx:"),
-        "Should contain left context: {}",
-        e.aux()
-    );
-    assert!(
-        e.aux().contains("あい"),
-        "Left context should contain 'あい': {}",
-        e.aux()
-    );
-    assert!(
-        e.aux().contains("rctx:"),
-        "Should contain right context: {}",
-        e.aux()
-    );
+    assert_eq!(e.preedit(), "あ");
+    assert!(!e.aux().contains("あい"));
+    assert!(!e.aux().contains("rctx:"));
 }
 
 // --- Shift+letter alphabet mode FFI tests ---

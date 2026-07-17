@@ -83,36 +83,10 @@ fn merge_toml(base: &mut toml::Value, overlay: &toml::Value) {
     }
 }
 
-const DEPRECATED_CONVERSION_KEYS: &[&str] = &[
-    "strategy",
-    "light_model",
-    "short_input_threshold",
-    "beam_width",
-    "max_latency_ms",
-];
-
-fn warn_deprecated_conversion_keys(user: &toml::Value) {
-    let Some(conversion) = user.get("conversion").and_then(toml::Value::as_table) else {
-        return;
-    };
-    let deprecated: Vec<_> = DEPRECATED_CONVERSION_KEYS
-        .iter()
-        .copied()
-        .filter(|key| conversion.contains_key(*key))
-        .collect();
-    if !deprecated.is_empty() {
-        warn!(
-            "Ignoring deprecated conversion settings: {}",
-            deprecated.join(", ")
-        );
-    }
-}
-
 /// Parse user TOML content merged on top of default.toml.
 fn parse_with_defaults(user_content: &str) -> Result<Settings> {
     let mut base: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML)?;
     let user: toml::Value = toml::from_str(user_content)?;
-    warn_deprecated_conversion_keys(&user);
     merge_toml(&mut base, &user);
     let settings: Settings = base.try_into()?;
     Ok(settings)
@@ -289,7 +263,7 @@ num_candidates = 3
     }
 
     #[test]
-    fn test_deprecated_conversion_settings_are_ignored() {
+    fn test_removed_conversion_settings_are_silently_ignored() {
         let settings = parse_with_defaults(
             r#"
 [conversion]
@@ -310,7 +284,13 @@ model = "jinen-v1-xsmall-q5"
         assert_eq!(settings.conversion.num_candidates, 9);
 
         let serialized = toml::to_string(&settings).unwrap();
-        for key in DEPRECATED_CONVERSION_KEYS {
+        for key in [
+            "strategy",
+            "light_model",
+            "short_input_threshold",
+            "beam_width",
+            "max_latency_ms",
+        ] {
             assert!(!serialized.contains(key));
         }
     }

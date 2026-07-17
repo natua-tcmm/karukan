@@ -31,6 +31,7 @@ build-universal:
 		-output $(CARGO_TARGET)/release/karukan-imserver
 
 test:
+	cargo build --manifest-path $(CARGO_MANIFEST) -p karukan-im --bin karukan-imserver
 	swift test
 	cargo test --manifest-path $(CARGO_MANIFEST) -p karukan-im
 
@@ -55,8 +56,15 @@ install-dict:
 		tmp=$$(mktemp -d) && \
 		( curl -fL --progress-bar -o "$$tmp/dict.tgz" "$(DICT_URL)" && \
 		  tar xzf "$$tmp/dict.tgz" -C "$$tmp" && \
+		  test -f "$$tmp/dict.bin" && \
 		  mkdir -p "$(DATA_DIR)" && \
 		  cp "$$tmp/dict.bin" "$(DATA_DIR)/" && \
+		  if [ -f "$$tmp/DICTIONARY_LICENSES.md" ]; then \
+		    cp "$$tmp/DICTIONARY_LICENSES.md" "$(DATA_DIR)/"; \
+		  fi && \
+		  if [ -f "$$tmp/dictionary-sources.toml" ]; then \
+		    cp "$$tmp/dictionary-sources.toml" "$(DATA_DIR)/"; \
+		  fi && \
 		  echo "Installed system dictionary to $(DATA_DIR)/dict.bin" \
 		) || echo "WARNING: system dictionary install failed; install manually (see README)"; \
 		rm -rf "$$tmp"; \

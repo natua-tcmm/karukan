@@ -18,7 +18,9 @@ final class TransportTests: XCTestCase {
             .deletingLastPathComponent()  // Tests
             .deletingLastPathComponent()  // karukan-macos
             .deletingLastPathComponent()  // repo root
-        for profile in ["release", "debug"] {
+        // `make test` rebuilds debug immediately before Swift tests. Prefer it
+        // so a stale release binary cannot mask a protocol incompatibility.
+        for profile in ["debug", "release"] {
             let candidate =
                 repoRoot
                 .appendingPathComponent("target/\(profile)/karukan-imserver").path

@@ -601,10 +601,13 @@ impl InputMethodEngine {
         // fails — symbol-only inputs (e.g. `。。。`) don't need the model and
         // we still want to produce dictionary, rewriter, and fallback candidates.
         // run_kana_kanji_conversion handles the converter-missing case.
-        if self.converters.kanji.is_none()
-            && let Err(e) = self.init_kanji_converter()
+        #[cfg(not(test))]
         {
-            debug!("Failed to initialize kanji converter: {}", e);
+            if self.converters.kanji.is_none()
+                && let Err(e) = self.init_kanji_converter()
+            {
+                debug!("Failed to initialize kanji converter: {}", e);
+            }
         }
 
         let api_context = self.truncate_context_for_api();

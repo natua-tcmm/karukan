@@ -36,3 +36,12 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+===============================================================================
+Generated system dictionary archives
+===============================================================================
+
+dict.bin is distributed separately and may contain multiple third-party
+dictionary sources. Its source manifest and DICTIONARY_LICENSES.md must be
+included in dict.tgz. See docs/dictionary-licenses.md and
+docs/dictionary-release.md before creating or publishing a dictionary archive.

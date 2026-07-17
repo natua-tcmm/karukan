@@ -366,10 +366,13 @@ impl InputMethodEngine {
     /// missing converter by yielding nothing, and each chunk falls back to its
     /// own reading.
     fn ensure_kanji_converter(&mut self) {
-        if self.converters.kanji.is_none()
-            && let Err(e) = self.init_kanji_converter()
+        #[cfg(not(test))]
         {
-            debug!("Failed to initialize kanji converter: {}", e);
+            if self.converters.kanji.is_none()
+                && let Err(e) = self.init_kanji_converter()
+            {
+                debug!("Failed to initialize kanji converter: {}", e);
+            }
         }
     }
 

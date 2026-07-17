@@ -12,6 +12,8 @@
 
 namespace fcitx {
 
+static_assert(KARUKAN_FFI_API_VERSION == 2, "Karukan C header/API mismatch");
+
 // X11 modifier bitmask constants matching the Rust FFI boundary (KeyModifiers::*_MASK).
 constexpr uint32_t kShiftMask = 1;    // ShiftMask
 constexpr uint32_t kControlMask = 4;  // ControlMask
