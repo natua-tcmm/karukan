@@ -27,6 +27,14 @@ fn shown_candidate_texts(result: &EngineResult) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn candidate_texts(candidates: &CandidateList) -> Vec<String> {
+    candidates
+        .candidates()
+        .iter()
+        .map(|candidate| candidate.text.clone())
+        .collect()
+}
+
 fn learn(engine: &mut InputMethodEngine, reading: &str, surface: &str) {
     let mut cache = LearningCache::new(100);
     cache.record(reading, surface);
@@ -149,6 +157,33 @@ fn space_skips_the_live_first_candidate_and_starts_from_the_second() {
         candidates.selected_text()
     );
     assert_eq!(candidates.len(), WHOLE_CANDIDATE_LIMIT);
+}
+
+#[test]
+fn space_reuses_the_exact_live_candidate_list() {
+    let mut engine = make_live_conversion_engine();
+    learn(&mut engine, "しよう", "私用");
+    engine.input_buf.text = "しよう".to_string();
+    engine.input_buf.cursor_pos = 3;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("しよう"),
+        romaji_buffer: String::new(),
+    };
+    engine.chunks = vec![ComposingChunk {
+        reading: "しよう".to_string(),
+        converted: "使用".to_string(),
+        candidates: vec!["使用".to_string(), "仕様".to_string(), "しよう".to_string()],
+    }];
+
+    engine.refresh_input_state();
+    let before = candidate_texts(engine.composing_candidates.as_ref().unwrap());
+
+    engine.process_key(&press_key(Keysym::SPACE));
+
+    let after = engine.state().candidates().unwrap();
+    assert_eq!(candidate_texts(after), before);
+    assert_eq!(after.cursor(), 1);
+    assert_eq!(after.selected_text(), before.get(1).map(String::as_str));
 }
 
 #[test]
