@@ -342,22 +342,28 @@ fn test_cursor_waseda_scenario() {
 }
 
 #[test]
-fn backspace_after_repeated_consonant_restores_romaji_conversion() {
-    let mut engine = make_live_conversion_engine();
+fn backspace_restores_passed_through_consonant_as_pending_romaji() {
+    for (mistyped, pending, continuation, expected) in [
+        ("kakusbk", "s", 'u', "かくす"),
+        ("kakushbk", "sh", 'i', "かくし"),
+    ] {
+        let mut engine = make_live_conversion_engine();
+        for ch in mistyped.chars() {
+            engine.process_key(&press(ch));
+        }
+        engine.process_key(&press_key(Keysym::BACKSPACE));
+        engine.process_key(&press_key(Keysym::BACKSPACE));
 
-    engine.process_key(&press('t'));
-    engine.process_key(&press('t'));
-    engine.process_key(&press_key(Keysym::BACKSPACE));
+        assert_eq!(engine.preedit().unwrap().text(), format!("かく{pending}"));
+        assert_eq!(engine.input_buf.text, "かく");
+        assert_eq!(engine.converters.romaji.buffer(), pending);
 
-    assert_eq!(engine.preedit().unwrap().text(), "t");
-    assert_eq!(engine.converters.romaji.buffer(), "t");
-    assert!(engine.input_buf.text.is_empty());
+        engine.process_key(&press(continuation));
 
-    engine.process_key(&press('a'));
-
-    assert_eq!(engine.input_buf.text, "た");
-    assert_eq!(engine.preedit().unwrap().text(), "た");
-    assert!(engine.converters.romaji.buffer().is_empty());
+        assert_eq!(engine.input_buf.text, expected);
+        assert_eq!(engine.preedit().unwrap().text(), expected);
+        assert!(engine.converters.romaji.buffer().is_empty());
+    }
 }
 
 #[test]

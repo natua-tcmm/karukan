@@ -20,9 +20,6 @@ pub enum BackspaceResult {
     RemovedOutput(char),
     /// Removed from buffer
     RemovedBuffer(char),
-    /// Undid a double-consonant sokuon and restored the first consonant to the
-    /// unconverted buffer.
-    RestoredSokuon(char),
     /// Nothing to remove
     Empty,
 }
@@ -33,10 +30,6 @@ pub struct RomajiConverter {
     trie: TrieNode,
     buffer: String,
     output: String,
-    /// Consonant whose repeated keystroke most recently emitted `っ`.
-    pending_sokuon_consonant: Option<char>,
-    /// Number of consecutive reversible sokuon emissions (`ttt` has depth 2).
-    pending_sokuon_depth: usize,
 }
 
 impl RomajiConverter {
@@ -46,8 +39,6 @@ impl RomajiConverter {
             trie: build_rules(),
             buffer: String::new(),
             output: String::new(),
-            pending_sokuon_consonant: None,
-            pending_sokuon_depth: 0,
         }
     }
 
@@ -55,15 +46,6 @@ impl RomajiConverter {
     pub fn push(&mut self, ch: char) -> ConversionEvent {
         // Handle uppercase by converting to lowercase
         let ch = ch.to_ascii_lowercase();
-
-        // A pending double consonant remains reversible only while the user
-        // repeats the same consonant. Any different next key accepts the
-        // sokuon and continues normal conversion.
-        let extends_pending_sokuon = self.pending_sokuon_consonant == Some(ch)
-            && self.buffer.chars().eq(std::iter::once(ch));
-        if self.pending_sokuon_consonant.is_some() && !extends_pending_sokuon {
-            self.clear_pending_sokuon();
-        }
 
         // Add to buffer
         self.buffer.push(ch);
@@ -126,12 +108,6 @@ impl RomajiConverter {
                 // Convert to sokuon and keep the last consonant
                 self.buffer = last.to_string();
                 self.output.push('っ');
-                if self.pending_sokuon_consonant == Some(last) {
-                    self.pending_sokuon_depth += 1;
-                } else {
-                    self.pending_sokuon_consonant = Some(last);
-                    self.pending_sokuon_depth = 1;
-                }
                 return ConversionEvent::Converted("っ".to_string());
             }
         }
@@ -238,25 +214,11 @@ impl RomajiConverter {
             }
         }
 
-        self.clear_pending_sokuon();
         result
     }
 
     /// Handle backspace
     pub fn backspace(&mut self) -> BackspaceResult {
-        if let Some(consonant) = self.pending_sokuon_consonant
-            && self.pending_sokuon_depth > 0
-            && self.buffer.chars().eq(std::iter::once(consonant))
-            && self.output.ends_with('っ')
-        {
-            self.output.pop();
-            self.pending_sokuon_depth -= 1;
-            if self.pending_sokuon_depth == 0 {
-                self.pending_sokuon_consonant = None;
-            }
-            return BackspaceResult::RestoredSokuon(consonant);
-        }
-
         if let Some(ch) = self.buffer.pop() {
             BackspaceResult::RemovedBuffer(ch)
         } else if let Some(ch) = self.output.pop() {
@@ -285,12 +247,6 @@ impl RomajiConverter {
     pub fn reset(&mut self) {
         self.buffer.clear();
         self.output.clear();
-        self.clear_pending_sokuon();
-    }
-
-    fn clear_pending_sokuon(&mut self) {
-        self.pending_sokuon_consonant = None;
-        self.pending_sokuon_depth = 0;
     }
 
     /// Get both output and buffer as a single string
@@ -426,41 +382,6 @@ mod tests {
 
         let result = conv.backspace();
         assert_eq!(result, BackspaceResult::RemovedOutput('か'));
-    }
-
-    #[test]
-    fn test_backspace_restores_consonant_before_sokuon() {
-        let mut conv = RomajiConverter::new();
-        conv.push('t');
-        conv.push('t');
-        assert_eq!(conv.output(), "っ");
-        assert_eq!(conv.buffer(), "t");
-
-        let result = conv.backspace();
-        assert_eq!(result, BackspaceResult::RestoredSokuon('t'));
-        assert_eq!(conv.output(), "");
-        assert_eq!(conv.buffer(), "t");
-
-        conv.push('a');
-        assert_eq!(conv.output(), "た");
-        assert_eq!(conv.buffer(), "");
-    }
-
-    #[test]
-    fn test_backspace_unwinds_only_the_latest_repeated_consonant() {
-        let mut conv = RomajiConverter::new();
-        "ttt".chars().for_each(|ch| {
-            conv.push(ch);
-        });
-        assert_eq!(conv.output(), "っっ");
-        assert_eq!(conv.buffer(), "t");
-
-        assert_eq!(conv.backspace(), BackspaceResult::RestoredSokuon('t'));
-        assert_eq!(conv.output(), "っ");
-        assert_eq!(conv.buffer(), "t");
-
-        conv.push('a');
-        assert_eq!(conv.output(), "った");
     }
 
     #[test]
