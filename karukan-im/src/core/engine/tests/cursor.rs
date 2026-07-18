@@ -342,6 +342,25 @@ fn test_cursor_waseda_scenario() {
 }
 
 #[test]
+fn backspace_after_repeated_consonant_restores_romaji_conversion() {
+    let mut engine = make_live_conversion_engine();
+
+    engine.process_key(&press('t'));
+    engine.process_key(&press('t'));
+    engine.process_key(&press_key(Keysym::BACKSPACE));
+
+    assert_eq!(engine.preedit().unwrap().text(), "t");
+    assert_eq!(engine.converters.romaji.buffer(), "t");
+    assert!(engine.input_buf.text.is_empty());
+
+    engine.process_key(&press('a'));
+
+    assert_eq!(engine.input_buf.text, "た");
+    assert_eq!(engine.preedit().unwrap().text(), "た");
+    assert!(engine.converters.romaji.buffer().is_empty());
+}
+
+#[test]
 fn test_cursor_composed_hiragana_tracking() {
     let mut engine = InputMethodEngine::new();
 

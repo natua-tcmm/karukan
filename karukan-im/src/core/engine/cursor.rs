@@ -23,7 +23,13 @@ impl InputMethodEngine {
     pub(super) fn backspace_composing(&mut self) -> EngineResult {
         // If romaji buffer is not empty, backspace from buffer (not from composed text)
         if !self.converters.romaji.buffer().is_empty() {
-            self.converters.romaji.backspace();
+            let result = self.converters.romaji.backspace();
+            if matches!(result, karukan_engine::BackspaceResult::RestoredSokuon(_)) {
+                self.input_buf.remove_char_before_cursor();
+            }
+            self.live.text.clear();
+            self.clear_composing_candidates();
+            self.chunks.clear();
             if let Some(result) = self.try_reset_if_empty() {
                 return result;
             }
