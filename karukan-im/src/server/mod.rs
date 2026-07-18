@@ -92,6 +92,10 @@ impl ImServer {
                 let result = self.engine.process_key(&event);
                 self.key_result(result)
             }
+            "poll_live_conversion" => {
+                let result = self.engine.poll_live_conversion().unwrap_or_default();
+                self.key_result(result)
+            }
             "select_candidate" => {
                 let params: SelectCandidateParams = parse_params(params)?;
                 if params.page_index >= CandidateList::DEFAULT_PAGE_SIZE {

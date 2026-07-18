@@ -44,7 +44,7 @@ fn common_suffix_len(a: &[char], b: &[char], prefix_len: usize) -> usize {
 /// `ジョン` / `・` / `スミス` with the `・` passed through verbatim. A katakana
 /// word like `スーパーマーケット` has no `・` and is entirely Japanese (the `ー`
 /// stays Japanese), so it remains one chunk.
-fn is_japanese(c: char) -> bool {
+pub(super) fn is_japanese(c: char) -> bool {
     // 中黒 (・): a katakana-block separator, treated as a non-Japanese symbol.
     if c == '\u{30FB}' {
         return false;
@@ -68,7 +68,7 @@ fn same_group(a: char, b: char) -> bool {
 /// [`is_japanese`]). So a maximal Japanese run and a maximal non-Japanese run
 /// each become their own chunk(s), and a run longer than `max` is hard-split
 /// into `max`-char pieces.
-fn group_chunks(chars: &[char], max: usize) -> Vec<&[char]> {
+pub(super) fn group_chunks(chars: &[char], max: usize) -> Vec<&[char]> {
     let mut out = Vec::new();
     let mut start = 0;
     while start < chars.len() {
@@ -90,7 +90,7 @@ fn group_chunks(chars: &[char], max: usize) -> Vec<&[char]> {
 /// the cursor are preferred, followed by other chunks from right to left.
 /// This keeps live candidate generation bounded instead of constructing the
 /// Cartesian product of every chunk's alternatives.
-fn assemble_chunk_candidates(
+pub(super) fn assemble_chunk_candidates(
     chunks: &[ComposingChunk],
     current_chunk: usize,
     limit: usize,
@@ -146,21 +146,26 @@ fn assemble_chunk_candidates(
 /// and only the `mid_start..mid_end` span (in chars of the new text) has to be
 /// re-chunked and reconverted.
 #[derive(Debug, PartialEq, Eq)]
-struct ChunkPlan {
+pub(super) struct ChunkPlan {
     /// Leading old chunks to reuse verbatim.
-    lead_count: usize,
+    pub(super) lead_count: usize,
     /// Trailing old chunks to reuse (cached conversion kept).
-    trail_count: usize,
+    pub(super) trail_count: usize,
     /// Char offset in the new text where the changed span begins (= leading chars).
-    mid_start: usize,
+    pub(super) mid_start: usize,
     /// Char offset in the new text where the changed span ends (= len - trailing chars).
-    mid_end: usize,
+    pub(super) mid_end: usize,
 }
 
 impl ChunkPlan {
     /// Diff `old_text` (the concatenated readings of the previous chunks,
     /// whose individual char lengths are `old_lens`) against the new `text`.
-    fn compute(old_lens: &[usize], old_text: &[char], text: &[char], chunk_len: usize) -> Self {
+    pub(super) fn compute(
+        old_lens: &[usize],
+        old_text: &[char],
+        text: &[char],
+        chunk_len: usize,
+    ) -> Self {
         let cp = common_prefix_len(old_text, text);
         let cs = common_suffix_len(old_text, text, cp);
 

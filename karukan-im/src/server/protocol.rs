@@ -10,6 +10,7 @@
 //! |------------------------|------------------------------------------|-------------------|
 //! | `init`                 | `{}`                                     | [`InitResult`]    |
 //! | `process_key`          | [`ProcessKeyParams`]                     | [`KeyResult`]     |
+//! | `poll_live_conversion` | `{}`                                     | [`KeyResult`]     |
 //! | `select_candidate`     | [`SelectCandidateParams`]                | [`KeyResult`]     |
 //! | `commit`               | `{}`                                     | [`KeyResult`]     |
 //! | `reset`                | `{}`                                     | `{}`              |

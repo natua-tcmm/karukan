@@ -36,10 +36,12 @@ pub struct ConversionSettings {
     pub max_context_length: usize,
     /// Maximum reading length (in characters) converted by the model in a single
     /// call during live conversion. The composing buffer is split into chunks
-    /// of at most this many characters so per-keystroke latency stays bounded
-    /// for long input; each chunk's left context is the converted text of the
-    /// preceding chunks.
+    /// of at most this many characters so each background inference stays
+    /// bounded for long input; each chunk's left context is the converted text
+    /// of the preceding chunks.
     pub composing_chunk_len: usize,
+    /// Minimum interval between background live-conversion starts.
+    pub live_inference_interval_ms: u64,
     /// Path to dictionary binary file (optional, defaults to data_dir/dict.bin)
     pub dict_path: Option<String>,
     /// Model variant id (optional, defaults to registry default)
@@ -201,6 +203,7 @@ mod tests {
         assert_eq!(settings.conversion.num_candidates, 9);
         assert!(settings.conversion.use_context);
         assert_eq!(settings.conversion.max_context_length, 10);
+        assert_eq!(settings.conversion.live_inference_interval_ms, 500);
     }
 
     #[test]

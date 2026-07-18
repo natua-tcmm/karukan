@@ -3,6 +3,7 @@
 //! This module contains the main `InputMethodEngine` struct that coordinates between
 //! the romaji converter, kanji converter, and manages the IME state.
 
+mod async_live;
 mod chunk;
 mod conversion;
 mod cursor;
@@ -179,12 +180,18 @@ pub struct InputMethodEngine {
     /// Tab/Down. Enter only commits `composing_candidates` after this flag is set;
     /// otherwise Enter keeps the traditional "commit current preedit" behavior.
     composing_candidate_selected: bool,
+    /// Whether composing candidates include a completed model result for the
+    /// current reading. Cheap candidates shown while inference is pending must
+    /// not be reused as the final Space-conversion list.
+    composing_candidates_model_ready: bool,
     /// Internal chunking of the composing buffer used by
     /// `chunked_auto_suggest`: a cache of the per-chunk model conversions.
     /// Re-chunking diffs the new buffer against this by common prefix/suffix so
     /// a keystroke only reconverts the chunk it touched, not the whole buffer.
     /// Empty when not composing.
     chunks: Vec<ComposingChunk>,
+    /// Monotonic identity of the current composing snapshot.
+    live_revision: u64,
     /// Dictionaries (system, user)
     dicts: Dictionaries,
     /// Learning cache (user conversion history)
@@ -224,7 +231,9 @@ impl InputMethodEngine {
             live: LiveConversion::default(),
             composing_candidates: None,
             composing_candidate_selected: false,
+            composing_candidates_model_ready: false,
             chunks: Vec::new(),
+            live_revision: 0,
             dicts: Dictionaries::default(),
             learning: None,
             segment_learning: None,
@@ -282,6 +291,7 @@ impl InputMethodEngine {
     /// the session. fcitx5 may send reset events between activate
     /// and the first keyEvent, which would wipe the context.
     pub fn reset(&mut self) {
+        self.live_revision = self.live_revision.wrapping_add(1);
         self.state = InputState::Empty;
         self.converters.romaji.reset();
         self.input_mode = InputMode::Hiragana;
@@ -290,6 +300,7 @@ impl InputMethodEngine {
         self.live.text.clear();
         self.composing_candidates = None;
         self.composing_candidate_selected = false;
+        self.composing_candidates_model_ready = false;
         self.chunks.clear();
         self.metrics = ConversionMetrics::default();
     }
@@ -357,14 +368,20 @@ impl InputMethodEngine {
     /// Store a fresh auto-suggest candidate list for Composing state.
     fn set_composing_candidates(&mut self, candidates: CandidateList) -> CandidateList {
         self.composing_candidate_selected = false;
+        self.composing_candidates_model_ready = false;
         self.composing_candidates = Some(candidates.clone());
         candidates
+    }
+
+    fn mark_composing_candidates_model_ready(&mut self) {
+        self.composing_candidates_model_ready = true;
     }
 
     /// Clear the composing-time auto-suggest selection/list.
     fn clear_composing_candidates(&mut self) {
         self.composing_candidates = None;
         self.composing_candidate_selected = false;
+        self.composing_candidates_model_ready = false;
     }
 
     /// Convert hiragana in input_buf to katakana permanently.
@@ -542,6 +559,7 @@ impl InputMethodEngine {
 
     /// Commit any pending input and return the text
     pub fn commit(&mut self) -> String {
+        self.live_revision = self.live_revision.wrapping_add(1);
         match &self.state {
             InputState::Empty => String::new(),
             InputState::Composing { .. } => {

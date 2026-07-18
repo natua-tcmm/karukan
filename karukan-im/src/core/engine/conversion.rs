@@ -193,9 +193,7 @@ impl InputMethodEngine {
         );
 
         let start = Instant::now();
-        let candidates = converter
-            .convert_scored(&katakana, api_context, candidate_count)
-            .unwrap_or_default();
+        let candidates = converter.convert_blocking(&katakana, api_context, candidate_count);
 
         self.metrics.conversion_ms += start.elapsed().as_millis() as u64;
         self.metrics.model_name = model_name;
@@ -217,6 +215,7 @@ impl InputMethodEngine {
     pub(super) fn start_conversion(&mut self, skip_learning: bool) -> EngineResult {
         let composing_reading = self.input_buf.text.clone();
         let composing_candidates = self.composing_candidates.clone();
+        let composing_candidates_model_ready = self.composing_candidates_model_ready;
         self.clear_composing_candidates();
         // Flush any remaining romaji into composed_hiragana
         self.flush_romaji_to_composed();
@@ -239,7 +238,14 @@ impl InputMethodEngine {
         // was already visible during live conversion into Conversion state.
         // Re-running whole/hybrid inference here made candidates 2 and 3
         // differ before and after Space even though candidate 1 was pinned.
-        let mut candidate_list = if composing_reading == reading {
+        let visible_live_list = !prev_suggest_text.is_empty()
+            && composing_candidates
+                .as_ref()
+                .and_then(CandidateList::selected_text)
+                == Some(prev_suggest_text.as_str());
+        let mut candidate_list = if composing_reading == reading
+            && (composing_candidates_model_ready || visible_live_list)
+        {
             composing_candidates.filter(|candidates| {
                 !candidates.is_empty()
                     && (prev_suggest_text.is_empty()

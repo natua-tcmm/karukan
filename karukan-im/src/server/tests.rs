@@ -232,3 +232,14 @@ fn test_status_before_init() {
     assert_eq!(resp["result"]["initialized"], false);
     assert_eq!(resp["result"]["state"], "empty");
 }
+
+#[test]
+fn test_poll_live_conversion_without_completed_result() {
+    let mut server = test_server();
+    let response = request(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":9,"method":"poll_live_conversion","params":{}}),
+    );
+    assert_eq!(response["result"]["consumed"], false);
+    assert_eq!(response["result"]["actions"], json!([]));
+}

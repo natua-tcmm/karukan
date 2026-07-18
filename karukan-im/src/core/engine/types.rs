@@ -1,9 +1,10 @@
 //! Type definitions for the IME engine
 
-use karukan_engine::{Dictionary, KanaKanjiConverter, RewriterChain, RomajiConverter};
+use karukan_engine::{Dictionary, RewriterChain, RomajiConverter};
 
 use super::super::candidate::CandidateList;
 use super::super::preedit::Preedit;
+use super::async_live::InferenceWorker;
 
 /// Action to be performed by the framework/UI layer
 #[derive(Debug, Clone)]
@@ -75,9 +76,11 @@ pub struct EngineConfig {
     pub max_api_context_len: usize,
     /// Maximum reading length (chars) converted by the model in a single call.
     /// The composing buffer is split into chunks of at most this many chars so
-    /// live-conversion latency stays bounded for long input. See
+    /// background live-conversion work stays bounded for long input. See
     /// [`ComposingChunk`] and `chunked_auto_suggest`.
     pub composing_chunk_len: usize,
+    /// Minimum interval between background live-conversion starts.
+    pub live_inference_interval_ms: u64,
     /// Whether live conversion is enabled at engine startup
     pub live_conversion: bool,
 }
@@ -96,6 +99,7 @@ impl EngineConfig {
                 0
             },
             composing_chunk_len: settings.conversion.composing_chunk_len,
+            live_inference_interval_ms: settings.conversion.live_inference_interval_ms,
             live_conversion: settings.conversion.live_conversion,
         }
     }
@@ -109,6 +113,7 @@ impl Default for EngineConfig {
             display_context_len: 10,
             max_api_context_len: 10,
             composing_chunk_len: 30,
+            live_inference_interval_ms: 500,
             live_conversion: false,
         }
     }
@@ -119,7 +124,7 @@ pub(in crate::core) struct Converters {
     /// Romaji to hiragana converter
     pub romaji: RomajiConverter,
     /// Kanji converter (lazy loaded)
-    pub kanji: Option<KanaKanjiConverter>,
+    pub kanji: Option<InferenceWorker>,
     /// Candidate rewriters (half-width katakana, symbol variants)
     pub rewriters: RewriterChain,
 }
