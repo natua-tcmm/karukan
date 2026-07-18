@@ -149,6 +149,84 @@ fn live_surface_morphology_initializes_conversion_segments() {
 }
 
 #[test]
+fn one_token_surface_rebuilds_candidates_for_segmented_conversion() {
+    let mut engine = InputMethodEngine::new();
+    let whole_candidates = CandidateList::from_strings_with_reading(["後", "跡", "アト"], "あと");
+    let session = engine.build_initial_conversion_session("あと", whole_candidates);
+
+    assert!(!session.is_whole_candidate_phase());
+    assert_eq!(session.segments.len(), 1);
+    assert_eq!(session.segments[0].reading_range, 0..2);
+    assert_eq!(session.segments[0].reading, "あと");
+    assert_eq!(session.segments[0].selected_text(), "後");
+    assert_eq!(session.preedit().text(), "後");
+
+    let texts: Vec<_> = session.segments[0]
+        .candidates
+        .candidates()
+        .iter()
+        .map(|candidate| candidate.text.as_str())
+        .collect();
+    assert_eq!(texts.first(), Some(&"後"));
+    assert!(texts.contains(&"あと"));
+    assert!(texts.len() > WHOLE_CANDIDATE_LIMIT);
+}
+
+#[test]
+fn exhausting_one_token_whole_candidates_enters_segmented_conversion() {
+    let mut engine = InputMethodEngine::new();
+    engine.input_buf.text = "あと".to_string();
+    engine.input_buf.cursor_pos = 2;
+    engine.live.text = "後".to_string();
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("後"),
+        romaji_buffer: String::new(),
+    };
+    engine.composing_candidates = Some(CandidateList::from_strings_with_reading(
+        ["後", "跡", "アト"],
+        "あと",
+    ));
+    engine.composing_candidates_model_ready = true;
+
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::SPACE));
+
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("segmented conversion expected");
+    };
+    assert!(!session.is_whole_candidate_phase());
+    assert_eq!(session.segments.len(), 1);
+    assert_eq!(session.selected_text(), "後");
+    assert!(session.candidates().unwrap().len() > WHOLE_CANDIDATE_LIMIT);
+}
+
+#[test]
+fn exhausting_one_token_composing_candidates_enters_segmented_conversion() {
+    let mut engine = InputMethodEngine::new();
+    engine.input_buf.text = "あと".to_string();
+    engine.input_buf.cursor_pos = 2;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("アト"),
+        romaji_buffer: String::new(),
+    };
+    let mut candidates = CandidateList::from_strings_with_reading(["後", "跡", "アト"], "あと");
+    candidates.select(2);
+    engine.composing_candidates = Some(candidates);
+    engine.composing_candidate_selected = true;
+
+    engine.process_key(&press_key(Keysym::SPACE));
+
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("segmented conversion expected");
+    };
+    assert!(!session.is_whole_candidate_phase());
+    assert_eq!(session.segments.len(), 1);
+    assert_eq!(session.selected_text(), "後");
+    assert!(session.candidates().unwrap().len() > WHOLE_CANDIDATE_LIMIT);
+}
+
+#[test]
 fn exhausting_whole_candidates_segments_the_live_first_surface() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};

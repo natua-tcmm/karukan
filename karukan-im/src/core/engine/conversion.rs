@@ -11,7 +11,7 @@ use crate::core::engine::long_conversion::{
     MAX_FINAL_CANDIDATES, MAX_SEARCH_STATES, MAX_SEGMENT_CANDIDATES, RankedText,
     combine_segment_options, split_conversion_reading,
 };
-use crate::core::engine::morphology::segment_live_surface;
+use crate::core::engine::morphology::{SurfaceSegment, segment_live_surface};
 
 /// Maximum number of learning candidates to show
 const MAX_LEARNING_CANDIDATES: usize = 3;
@@ -376,8 +376,7 @@ impl InputMethodEngine {
         self.clear_composing_candidates();
         self.input_buf.cursor_pos = 0;
 
-        let mut session = self.build_conversion_session(&reading, fallback_candidates);
-        session.finish_whole_candidate_phase();
+        let session = self.build_segmented_conversion_session(&reading, fallback_candidates);
         self.enter_conversion_state(session)
     }
 
@@ -387,10 +386,10 @@ impl InputMethodEngine {
         reading: &str,
         full_candidates: CandidateList,
     ) -> crate::core::state::ConversionSession {
-        self.build_conversion_session(reading, full_candidates)
+        self.build_segmented_conversion_session(reading, full_candidates)
     }
 
-    fn build_conversion_session(
+    fn build_segmented_conversion_session(
         &mut self,
         reading: &str,
         full_candidates: CandidateList,
@@ -399,17 +398,27 @@ impl InputMethodEngine {
         // may currently be highlighting candidate 2 or 3, but partial
         // conversion must derive stable boundaries from the most likely
         // sentence rather than from whichever whole candidate was viewed last.
-        let Some(live_candidate) = full_candidates.candidates().first().cloned() else {
-            return self.single_segment_session_with_learning(reading, full_candidates);
-        };
-        let Some(initial) = segment_live_surface(&live_candidate.text, reading) else {
-            return self.single_segment_session_with_learning(reading, full_candidates);
-        };
-        if initial.len() <= 1 {
-            return self.single_segment_session_with_learning(reading, full_candidates);
-        }
+        let live_surface = full_candidates
+            .candidates()
+            .first()
+            .map(|candidate| candidate.text.as_str())
+            .filter(|surface| !surface.is_empty())
+            .unwrap_or(reading)
+            .to_string();
+        // Partial conversion is a mode transition, not a promise that
+        // morphology will produce multiple spans. Even one-token input (or a
+        // failed analysis) must rebuild a segment candidate list instead of
+        // retaining the exhausted three whole-reading candidates.
+        let initial = segment_live_surface(&live_surface, reading).unwrap_or_else(|| {
+            vec![SurfaceSegment {
+                reading_range: 0..reading.chars().count(),
+                reading: reading.to_string(),
+                surface: live_surface.clone(),
+            }]
+        });
 
         let mut segments = Vec::with_capacity(initial.len());
+        let mut preserved_live_surface = true;
         for (index, initial_segment) in initial.iter().enumerate() {
             let left_hint = index
                 .checked_sub(1)
@@ -431,17 +440,24 @@ impl InputMethodEngine {
                 .map(|candidate| candidate.into_ui_candidate(&initial_segment.reading))
                 .collect(),
             );
-            let (candidates, _) = self.prepend_segment_learning(
+            let (candidates, has_segment_learning) = self.prepend_segment_learning(
                 &initial_segment.reading,
                 base_candidates,
                 left_hint.as_deref(),
                 right_hint.as_deref(),
             );
-            let candidates = pin_current_surface(
-                candidates,
-                &initial_segment.surface,
-                &initial_segment.reading,
-            );
+            let candidates = if has_segment_learning {
+                // A context-matching explicit correction is the one case that
+                // intentionally supersedes the model's current surface.
+                preserved_live_surface = false;
+                candidates
+            } else {
+                pin_current_surface(
+                    candidates,
+                    &initial_segment.surface,
+                    &initial_segment.reading,
+                )
+            };
             segments.push(crate::core::state::ConversionSegment::new(
                 initial_segment.reading_range.clone(),
                 initial_segment.reading.clone(),
@@ -451,24 +467,10 @@ impl InputMethodEngine {
 
         let session =
             crate::core::state::ConversionSession::segmented(reading.to_string(), segments);
-        debug_assert_eq!(session.selected_text(), live_candidate.text);
+        if preserved_live_surface {
+            debug_assert_eq!(session.selected_text(), live_surface);
+        }
         session
-    }
-
-    fn single_segment_session_with_learning(
-        &self,
-        reading: &str,
-        candidates: CandidateList,
-    ) -> crate::core::state::ConversionSession {
-        let left_hint = self.editor_left_hint();
-        let right_hint = self.editor_right_hint();
-        let (candidates, _) = self.prepend_segment_learning(
-            reading,
-            candidates,
-            left_hint.as_deref(),
-            right_hint.as_deref(),
-        );
-        crate::core::state::ConversionSession::single(reading.to_string(), candidates)
     }
 
     fn editor_left_hint(&self) -> Option<String> {
@@ -1556,8 +1558,7 @@ impl InputMethodEngine {
             return EngineResult::not_consumed();
         };
 
-        let mut session = self.build_conversion_session(&reading, fallback_candidates);
-        session.finish_whole_candidate_phase();
+        let session = self.build_segmented_conversion_session(&reading, fallback_candidates);
         self.enter_conversion_state(session)
     }
 
