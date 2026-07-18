@@ -26,7 +26,7 @@ fn threads_label(n_threads: u32) -> String {
 
 impl InputMethodEngine {
     /// Full engine initialization from user settings: system dictionary,
-    /// user dictionaries, learning cache, and the configured conversion model.
+    /// user dictionaries, correction learning, and the configured conversion model.
     ///
     /// Shared by the fcitx5 FFI (`karukan_engine_init`) and the stdio
     /// JSON-RPC server (`init` method).
@@ -35,7 +35,6 @@ impl InputMethodEngine {
 
         self.init_system_dictionary(settings.conversion.dict_path.as_deref());
         self.init_user_dictionaries();
-        self.init_learning_cache(settings.learning.enabled, settings.learning.max_entries);
         self.init_segment_learning_cache(settings.learning.enabled, settings.learning.max_entries);
         super::morphology::warm_up();
 
@@ -108,42 +107,6 @@ impl InputMethodEngine {
             Err(e) => {
                 debug!("Failed to load system dictionary from {:?}: {}", path, e);
             }
-        }
-    }
-
-    /// Initialize the learning cache from disk.
-    ///
-    /// Loads `~/.local/share/karukan-im/learning.tsv` if it exists.
-    /// If the file doesn't exist, creates an empty in-memory cache.
-    pub fn init_learning_cache(&mut self, enabled: bool, max_entries: usize) {
-        if !enabled || self.learning.is_some() {
-            return;
-        }
-
-        let Some(path) = Settings::learning_file() else {
-            debug!("Could not determine learning cache path");
-            self.learning = Some(LearningCache::new(max_entries));
-            return;
-        };
-
-        if path.exists() {
-            match LearningCache::load(&path, max_entries) {
-                Ok(cache) => {
-                    debug!(
-                        "Learning cache loaded from {:?} ({} entries)",
-                        path,
-                        cache.entry_count()
-                    );
-                    self.learning = Some(cache);
-                }
-                Err(e) => {
-                    debug!("Failed to load learning cache from {:?}: {}", path, e);
-                    self.learning = Some(LearningCache::new(max_entries));
-                }
-            }
-        } else {
-            debug!("Learning cache not found at {:?}, starting empty", path);
-            self.learning = Some(LearningCache::new(max_entries));
         }
     }
 

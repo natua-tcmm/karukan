@@ -16,6 +16,60 @@ use crate::core::engine::morphology::segment_live_surface;
 /// Maximum number of learning candidates to show
 const MAX_LEARNING_CANDIDATES: usize = 3;
 
+type SegmentLearningRecord = (String, String, Option<String>, Option<String>);
+
+/// Derive correction-learning records from an explicitly selected whole
+/// surface. Only tokens that occupy the same reading range in the initial and
+/// selected surfaces are safe to compare. If morphology cannot align a token,
+/// it is deliberately left unlearned instead of falling back to a whole-sentence
+/// history entry.
+fn surface_correction_records(
+    reading: &str,
+    initial_surface: &str,
+    selected_surface: &str,
+    editor_left_hint: Option<&str>,
+    editor_right_hint: Option<&str>,
+) -> Vec<SegmentLearningRecord> {
+    if initial_surface == selected_surface {
+        return Vec::new();
+    }
+    let Some(initial_segments) = segment_live_surface(initial_surface, reading) else {
+        return Vec::new();
+    };
+    let Some(selected_segments) = segment_live_surface(selected_surface, reading) else {
+        return Vec::new();
+    };
+
+    selected_segments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, selected)| {
+            let initial = initial_segments
+                .iter()
+                .find(|initial| initial.reading_range == selected.reading_range)?;
+            if initial.surface == selected.surface {
+                return None;
+            }
+            let left_hint = index
+                .checked_sub(1)
+                .and_then(|previous| selected_segments[previous].surface.chars().last())
+                .map(|ch| ch.to_string())
+                .or_else(|| editor_left_hint.map(str::to_string));
+            let right_hint = selected_segments
+                .get(index + 1)
+                .and_then(|next| next.surface.chars().next())
+                .map(|ch| ch.to_string())
+                .or_else(|| editor_right_hint.map(str::to_string));
+            Some((
+                selected.reading.clone(),
+                selected.surface.clone(),
+                left_hint,
+                right_hint,
+            ))
+        })
+        .collect()
+}
+
 /// Find one candidate per reading segment whose concatenation exactly matches
 /// the whole-reading surface. A failed alignment must never be replaced by a
 /// character-count heuristic: doing so can attach an unrelated surface such
@@ -124,7 +178,7 @@ impl CandidateBuilder {
 
     /// Push a candidate unconditionally, marking its text as seen so later
     /// dedup'd inserts skip it. Use only for sources that should win over
-    /// duplicates from later steps (e.g. learning cache).
+    /// duplicates from later steps (e.g. correction learning).
     fn push_force(&mut self, candidate: ConversionCandidate) {
         self.seen.insert(candidate.text.clone());
         self.candidates.push(candidate);
@@ -689,13 +743,13 @@ impl InputMethodEngine {
 
     /// Build conversion candidates for a reading from multiple sources.
     ///
-    /// Combines learning cache, dictionaries, and model inference results
+    /// Combines correction learning, dictionaries, and model inference results
     /// with deduplication. Uses dynamic candidate count based on input token
     /// count for performance.
     ///
-    /// Priority: Learning → User Dictionary → Model → System Dictionary → Fallback
+    /// Priority: Correction learning → User Dictionary → Model → System Dictionary → Fallback
     ///
-    /// `skip_learning` suppresses the learning-cache step (1). Normal key input
+    /// `skip_learning` suppresses the correction-learning step (1). Normal key input
     /// keeps this false; tests can still exercise the learning-free branch.
     pub(super) fn build_conversion_candidates(
         &mut self,
@@ -725,10 +779,10 @@ impl InputMethodEngine {
         let hiragana = reading.to_string();
         let katakana = karukan_engine::hiragana_to_katakana(reading);
 
-        // Priority: Learning → User Dictionary → Model → System Dictionary → Fallback
+        // Priority: Correction learning → User Dictionary → Model → System Dictionary → Fallback
         let mut builder = CandidateBuilder::new();
 
-        // 1. Learning cache candidates (highest priority).
+        // 1. Exact correction-learning candidates (highest priority).
         //    Force-inserted so they win against duplicate text from later sources.
         //    Skipped when the caller asks for a learning-free conversion (Tab key).
         if !skip_learning {
@@ -884,46 +938,30 @@ impl InputMethodEngine {
         builder.into_candidates()
     }
 
-    /// Look up learning cache candidates for a reading (exact + prefix match, max 3).
+    /// Look up explicitly corrected segments by exact reading and context.
     ///
-    /// Returns candidates from the learning cache suitable for auto-suggest display.
+    /// There is intentionally no prefix lookup: learning is correction memory,
+    /// not a history-completion feature.
     pub(super) fn lookup_learning_candidates(&self, reading: &str) -> Vec<Candidate> {
-        let Some(cache) = &self.learning else {
+        let Some(cache) = &self.segment_learning else {
             return vec![];
         };
+        let left_hint = self.editor_left_hint();
+        let right_hint = self.editor_right_hint();
         let mut candidates: Vec<Candidate> = Vec::new();
         let mut seen = HashSet::new();
         let label = CandidateSource::Learning.label().to_string();
 
-        // Exact match
-        for (surface, _score) in cache.lookup(reading) {
+        for (entry, _score) in cache.lookup(reading, left_hint.as_deref(), right_hint.as_deref()) {
             if candidates.len() >= MAX_LEARNING_CANDIDATES {
                 break;
             }
-            if seen.insert(surface.clone()) {
+            if seen.insert(entry.surface.clone()) {
                 candidates.push(Candidate {
-                    text: surface,
+                    text: entry.surface,
                     reading: Some(reading.to_string()),
                     source_label: Some(label.clone()),
-                    description: None,
-                });
-            }
-        }
-
-        // Prefix match (predictive)
-        for (full_reading, surface, _score) in cache.prefix_lookup(reading) {
-            if candidates.len() >= MAX_LEARNING_CANDIDATES {
-                break;
-            }
-            if full_reading == reading {
-                continue;
-            }
-            if seen.insert(surface.clone()) {
-                candidates.push(Candidate {
-                    text: surface,
-                    reading: Some(full_reading),
-                    source_label: Some(label.clone()),
-                    description: None,
+                    description: Some("文節修正".to_string()),
                 });
             }
         }
@@ -1271,65 +1309,15 @@ impl InputMethodEngine {
         self.update_conversion_preedit(&candidates)
     }
 
-    /// Get selected text and reading from conversion state, or None if not in conversion
-    fn selected_conversion_info(&self) -> Option<(String, Option<String>)> {
+    /// Get selected text from conversion state, or `None` if not converting.
+    fn selected_conversion_text(&self) -> Option<String> {
         match &self.state {
-            InputState::Conversion { session } => {
-                let text = session.selected_text();
-                let reading = session
-                    .active()
-                    .and_then(|segment| segment.candidates.selected())
-                    .and_then(|candidate| candidate.reading.clone())
-                    .or_else(|| Some(session.reading.clone()));
-                Some((text, reading))
-            }
+            InputState::Conversion { session } => Some(session.selected_text()),
             _ => None,
         }
     }
 
-    /// Record a conversion selection in the learning cache.
-    pub(super) fn record_learning(&mut self, reading: &str, surface: &str) {
-        if let Some(cache) = &mut self.learning {
-            cache.record(reading, surface);
-        }
-    }
-
-    /// Record only segments the user explicitly corrected. Merely accepting
-    /// the initial top candidate or live conversion does not enter this cache.
-    pub(super) fn record_modified_segments(&mut self) {
-        let records = {
-            let InputState::Conversion { session } = &self.state else {
-                return;
-            };
-            session
-                .segments
-                .iter()
-                .enumerate()
-                .filter(|(_, segment)| segment.explicitly_modified)
-                .map(|(index, segment)| {
-                    let left_hint = index
-                        .checked_sub(1)
-                        .and_then(|previous| {
-                            session.segments[previous].selected_text().chars().last()
-                        })
-                        .map(|ch| ch.to_string())
-                        .or_else(|| self.editor_left_hint());
-                    let right_hint = session
-                        .segments
-                        .get(index + 1)
-                        .and_then(|next| next.selected_text().chars().next())
-                        .map(|ch| ch.to_string())
-                        .or_else(|| self.editor_right_hint());
-                    (
-                        segment.reading.clone(),
-                        segment.selected_text().to_string(),
-                        left_hint,
-                        right_hint,
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-
+    fn store_segment_learning_records(&mut self, records: Vec<SegmentLearningRecord>) {
         let Some(cache) = &mut self.segment_learning else {
             return;
         };
@@ -1343,9 +1331,101 @@ impl InputMethodEngine {
         }
     }
 
+    /// Learn an explicitly selected composing candidate by comparing it with
+    /// the initial candidate. A no-op selection and ordinary Enter commit do
+    /// not create history.
+    pub(super) fn record_selected_composing_correction(&mut self) {
+        if !self.composing_candidate_selected || self.input_mode == InputMode::Emoji {
+            return;
+        }
+        let records = {
+            let Some(candidates) = &self.composing_candidates else {
+                return;
+            };
+            let Some(initial_surface) = candidates.candidates().first().map(|c| c.text.as_str())
+            else {
+                return;
+            };
+            let Some(selected_surface) = candidates.selected_text() else {
+                return;
+            };
+            let left_hint = self.editor_left_hint();
+            let right_hint = self.editor_right_hint();
+            surface_correction_records(
+                &self.input_buf.text,
+                initial_surface,
+                selected_surface,
+                left_hint.as_deref(),
+                right_hint.as_deref(),
+            )
+        };
+        self.store_segment_learning_records(records);
+    }
+
+    /// Record only segments the user explicitly corrected. Merely accepting
+    /// the initial top candidate or live conversion does not enter this cache.
+    pub(super) fn record_modified_segments(&mut self) {
+        let editor_left_hint = self.editor_left_hint();
+        let editor_right_hint = self.editor_right_hint();
+        let records = {
+            let InputState::Conversion { session } = &self.state else {
+                return;
+            };
+            if session.is_whole_candidate_phase() {
+                let Some(segment) = session.active() else {
+                    return;
+                };
+                let Some(initial_surface) = segment
+                    .candidates
+                    .candidates()
+                    .first()
+                    .map(|c| c.text.as_str())
+                else {
+                    return;
+                };
+                surface_correction_records(
+                    &session.reading,
+                    initial_surface,
+                    segment.selected_text(),
+                    editor_left_hint.as_deref(),
+                    editor_right_hint.as_deref(),
+                )
+            } else {
+                session
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, segment)| segment.explicitly_modified)
+                    .map(|(index, segment)| {
+                        let left_hint = index
+                            .checked_sub(1)
+                            .and_then(|previous| {
+                                session.segments[previous].selected_text().chars().last()
+                            })
+                            .map(|ch| ch.to_string())
+                            .or_else(|| editor_left_hint.clone());
+                        let right_hint = session
+                            .segments
+                            .get(index + 1)
+                            .and_then(|next| next.selected_text().chars().next())
+                            .map(|ch| ch.to_string())
+                            .or_else(|| editor_right_hint.clone());
+                        (
+                            segment.reading.clone(),
+                            segment.selected_text().to_string(),
+                            left_hint,
+                            right_hint,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }
+        };
+        self.store_segment_learning_records(records);
+    }
+
     /// Commit the current conversion
     fn commit_conversion(&mut self) -> EngineResult {
-        let Some((text, reading)) = self.selected_conversion_info() else {
+        let Some(text) = self.selected_conversion_text() else {
             return EngineResult::not_consumed();
         };
 
@@ -1354,15 +1434,6 @@ impl InputMethodEngine {
         }
 
         self.record_modified_segments();
-
-        // Skip learning when the buffer is a `:shortcode` query — the
-        // reading would be e.g. `:smile`, which isn't a hiragana key
-        // and would corrupt the kana-keyed learning cache.
-        if self.input_mode != InputMode::Emoji
-            && let Some(reading) = &reading
-        {
-            self.record_learning(reading, &text);
-        }
 
         self.state = InputState::Empty;
         self.input_buf.text.clear();
@@ -1378,17 +1449,11 @@ impl InputMethodEngine {
 
     /// Commit current conversion and then process a new character as fresh input
     fn commit_conversion_and_continue(&mut self, ch: char) -> EngineResult {
-        let Some((text, reading)) = self.selected_conversion_info() else {
+        let Some(text) = self.selected_conversion_text() else {
             return EngineResult::not_consumed();
         };
 
         self.record_modified_segments();
-
-        if self.input_mode != InputMode::Emoji
-            && let Some(reading) = &reading
-        {
-            self.record_learning(reading, &text);
-        }
 
         self.state = InputState::Empty;
         self.input_buf.text.clear();

@@ -24,7 +24,7 @@ live_conversion = true
 # ユーザー辞書: ~/.local/share/karukan-im/user_dicts/ に辞書ファイルを配置（Mozc TSV or KRKN binary）
 
 [learning]
-# 変換学習を有効にする
+# 明示的に修正した文節の学習を有効にする
 enabled = true
-# 学習エントリの最大数
+# 文節修正エントリの最大数
 max_entries = 10000

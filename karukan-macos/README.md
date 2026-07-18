@@ -115,8 +115,8 @@ fcitx5版と同じキーバインドに加えて:
 - 設定: `~/Library/Application Support/com.karukan.karukan-im/config.toml`
 - システム辞書: `~/Library/Application Support/com.karukan.karukan-im/dict.bin`
 - ユーザー辞書: `~/Library/Application Support/com.karukan.karukan-im/user_dicts/`
-- 学習データ: `~/Library/Application Support/com.karukan.karukan-im/learning.tsv`
-- 文節学習データ: `~/Library/Application Support/com.karukan.karukan-im/segment_learning.tsv`
+- 文節修正学習データ: `~/Library/Application Support/com.karukan.karukan-im/segment_learning.tsv`
+- 旧全文履歴 `learning.tsv` は読み込まれません
 
 ## デバッグ
 

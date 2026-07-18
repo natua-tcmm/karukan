@@ -52,7 +52,7 @@ impl ImServer {
         }
     }
 
-    /// Save the learning cache (called on EOF/shutdown).
+    /// Save correction learning (called on EOF/shutdown).
     pub fn save_learning(&mut self) {
         self.engine.save_learning();
     }

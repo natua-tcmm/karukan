@@ -1,5 +1,5 @@
 use super::*;
-use karukan_engine::LearningCache;
+use karukan_engine::SegmentLearningCache;
 
 // --- Candidate preservation tests ---
 
@@ -36,9 +36,9 @@ fn candidate_texts(candidates: &CandidateList) -> Vec<String> {
 }
 
 fn learn(engine: &mut InputMethodEngine, reading: &str, surface: &str) {
-    let mut cache = LearningCache::new(100);
-    cache.record(reading, surface);
-    engine.learning = Some(cache);
+    let mut cache = SegmentLearningCache::new(100);
+    cache.record(reading, surface, None, None);
+    engine.segment_learning = Some(cache);
 }
 
 #[test]

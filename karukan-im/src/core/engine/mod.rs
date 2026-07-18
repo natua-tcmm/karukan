@@ -23,8 +23,7 @@ use input_buffer::InputBuffer;
 mod tests;
 
 use karukan_engine::{
-    Dictionary, KanaKanjiConverter, LearningCache, RewriterChain, RomajiConverter,
-    SegmentLearningCache,
+    Dictionary, KanaKanjiConverter, RewriterChain, RomajiConverter, SegmentLearningCache,
 };
 use tracing::{debug, trace};
 
@@ -42,7 +41,7 @@ const WHOLE_CANDIDATE_LIMIT: usize = 3;
 enum CandidateSource {
     /// User dictionary lookup
     UserDictionary,
-    /// Learning cache (user history)
+    /// Explicit segment-correction learning
     Learning,
     /// Model inference result
     Model,
@@ -76,7 +75,7 @@ impl CandidateSource {
 struct ConversionCandidate {
     text: String,
     source: CandidateSource,
-    /// Override reading (e.g. from prefix_lookup where the full reading differs from input)
+    /// Override reading when a candidate belongs to a narrower conversion segment.
     reading: Option<String>,
     /// Score supplied by the originating subsystem. Its scale is source-specific.
     #[allow(dead_code)]
@@ -197,8 +196,6 @@ pub struct InputMethodEngine {
     live_cancel_revision: u64,
     /// Dictionaries (system, user)
     dicts: Dictionaries,
-    /// Learning cache (user conversion history)
-    learning: Option<LearningCache>,
     /// Context-aware learning for explicitly corrected conversion segments.
     segment_learning: Option<SegmentLearningCache>,
 }
@@ -239,7 +236,6 @@ impl InputMethodEngine {
             live_revision: 0,
             live_cancel_revision: 0,
             dicts: Dictionaries::default(),
-            learning: None,
             segment_learning: None,
         }
     }
@@ -581,8 +577,7 @@ impl InputMethodEngine {
                 } else {
                     reading.clone()
                 };
-                // Record live conversion result in learning cache
-                self.record_learning(&reading, &text);
+                self.record_selected_composing_correction();
                 self.converters.romaji.reset();
                 self.input_buf.clear();
                 self.live.clear();
@@ -593,12 +588,7 @@ impl InputMethodEngine {
             }
             InputState::Conversion { session } => {
                 let text = session.selected_text();
-                let reading = Some(session.reading.clone());
                 self.record_modified_segments();
-                // Record conversion result in learning cache
-                if let Some(reading) = &reading {
-                    self.record_learning(reading, &text);
-                }
                 self.input_buf.clear();
                 self.clear_composing_candidates();
                 self.state = InputState::Empty;
@@ -624,18 +614,8 @@ impl InputMethodEngine {
             .with_action(EngineAction::HideAuxText)
     }
 
-    /// Save the learning cache to disk if it has unsaved changes.
+    /// Save explicitly corrected segment learning to disk if it changed.
     pub fn save_learning(&mut self) {
-        if let Some(cache) = &mut self.learning
-            && cache.is_dirty()
-            && let Some(path) = Settings::learning_file()
-        {
-            if let Err(e) = cache.save(&path) {
-                debug!("Failed to save learning cache: {}", e);
-            } else {
-                debug!("Learning cache saved to {:?}", path);
-            }
-        }
         if let Some(cache) = &mut self.segment_learning
             && cache.is_dirty()
             && let Some(path) = Settings::segment_learning_file()

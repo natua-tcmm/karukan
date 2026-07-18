@@ -795,6 +795,29 @@ fn explicitly_selected_segment_is_learned_with_right_context() {
 }
 
 #[test]
+fn whole_candidate_selection_learns_only_the_changed_segment() {
+    use crate::core::state::ConversionSession;
+
+    let mut engine = InputMethodEngine::new();
+    engine.segment_learning = Some(karukan_engine::SegmentLearningCache::new(100));
+    let mut candidates = CandidateList::from_strings(["今日は雨", "今日は飴"]);
+    // Space enters whole-candidate conversion at candidate 2 without marking
+    // the single segment explicitly_modified. The surface difference itself is
+    // therefore the source of truth for correction learning.
+    candidates.select(1);
+    engine.state = InputState::Conversion {
+        session: ConversionSession::single("きょうはあめ".into(), candidates),
+    };
+
+    engine.process_key(&press_key(Keysym::RETURN));
+
+    let cache = engine.segment_learning.as_ref().unwrap();
+    let learned_word = cache.lookup("あめ", Some("は"), None);
+    assert!(learned_word.iter().any(|(entry, _)| entry.surface == "飴"));
+    assert!(cache.lookup("きょうはあめ", None, None).is_empty());
+}
+
+#[test]
 fn accepting_initial_segment_does_not_enter_segment_learning() {
     use crate::core::state::{ConversionSegment, ConversionSession};
 

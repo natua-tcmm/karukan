@@ -2,7 +2,7 @@
 //!
 //! Reads newline-delimited JSON-RPC 2.0 requests from stdin and writes one
 //! response per line to stdout. Logs go to stderr (`RUST_LOG` controls the
-//! filter; defaults to `info`). The learning cache is saved on EOF, so the
+//! filter; defaults to `info`). Correction learning is saved on EOF, so the
 //! frontend should close the child's stdin (or send `save_learning`) before
 //! terminating it.
 //!
@@ -67,6 +67,6 @@ fn main() {
         }
     }
 
-    tracing::info!("stdin closed, saving learning cache and exiting");
+    tracing::info!("stdin closed, saving correction learning and exiting");
     server.save_learning();
 }

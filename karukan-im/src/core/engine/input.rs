@@ -703,13 +703,7 @@ impl InputMethodEngine {
         }
         let candidates = self.composing_candidates.as_ref()?;
         let text = candidates.selected_text()?.to_string();
-        let reading = candidates
-            .selected()
-            .and_then(|c| c.reading.clone())
-            .unwrap_or_else(|| self.input_buf.text.clone());
-        if !text.is_empty() && self.input_mode != InputMode::Emoji {
-            self.record_learning(&reading, &text);
-        }
+        self.record_selected_composing_correction();
 
         self.invalidate_live_results();
         self.converters.romaji.reset();
@@ -800,14 +794,6 @@ impl InputMethodEngine {
             return EngineResult::consumed()
                 .with_action(EngineAction::HideCandidates)
                 .with_action(EngineAction::HideAuxText);
-        }
-
-        // Record live conversion result in learning cache.
-        // Skip the learning record for emoji mode — the buffer holds
-        // a Slack-style query like `:smile`, not a hiragana reading,
-        // so storing it would corrupt the kana-keyed learning cache.
-        if self.input_mode != InputMode::Emoji {
-            self.record_learning(&reading, &text);
         }
 
         self.converters.romaji.reset();

@@ -19,7 +19,7 @@ const DEFAULT_CONFIG_TOML: &str = include_str!("../../config/default.toml");
 pub struct Settings {
     /// Conversion settings
     pub conversion: ConversionSettings,
-    /// Learning cache settings
+    /// Explicit segment-correction learning settings
     pub learning: LearningSettings,
 }
 
@@ -50,12 +50,12 @@ pub struct ConversionSettings {
     pub live_conversion: bool,
 }
 
-/// Learning cache settings
+/// Explicit segment-correction learning settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LearningSettings {
-    /// Whether learning is enabled
+    /// Whether explicit segment-correction learning is enabled
     pub enabled: bool,
-    /// Maximum number of total entries in the learning cache
+    /// Maximum number of correction entries
     pub max_entries: usize,
 }
 
@@ -119,13 +119,6 @@ impl Settings {
     /// Default: `~/.local/share/karukan-im/user_dicts/`
     pub fn user_dict_dir() -> Option<PathBuf> {
         Self::data_dir().map(|dir| dir.join("user_dicts"))
-    }
-
-    /// Get the learning cache file path.
-    ///
-    /// Default: `~/.local/share/karukan-im/learning.tsv`
-    pub fn learning_file() -> Option<PathBuf> {
-        Self::data_dir().map(|dir| dir.join("learning.tsv"))
     }
 
     /// Get the context-aware segment learning cache file path.
