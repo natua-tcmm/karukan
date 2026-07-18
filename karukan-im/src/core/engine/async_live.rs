@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use super::ComposingChunk;
 use super::chunk::{ChunkPlan, assemble_chunk_candidates, group_chunks, is_japanese};
+use super::morphology::model_candidate_preserves_reading;
 use karukan_engine::{KanaKanjiConverter, ModelCandidate};
 
 #[derive(Debug, Clone)]
@@ -187,6 +188,19 @@ enum WorkerJob {
     Live(LiveInferenceRequest),
 }
 
+fn validated_live_candidate_texts(reading: &str, candidates: Vec<ModelCandidate>) -> Vec<String> {
+    let mut values: Vec<String> = candidates
+        .into_iter()
+        .filter(|candidate| model_candidate_preserves_reading(&candidate.text, reading))
+        .map(|candidate| candidate.text)
+        .collect();
+    values.dedup();
+    if values.is_empty() {
+        values.push(reading.to_string());
+    }
+    values
+}
+
 fn convert_live(
     converter: &KanaKanjiConverter,
     request: LiveInferenceRequest,
@@ -213,17 +227,12 @@ fn convert_live(
                 &format!("{}{}", request.base_context, combined),
                 request.max_context_len,
             );
-            let mut values: Vec<String> = converter
-                .convert_scored(&reading, &context, request.num_candidates.max(1))
-                .unwrap_or_default()
-                .into_iter()
-                .map(|candidate| candidate.text)
-                .collect();
-            values.dedup();
-            if values.is_empty() {
-                values.push(reading.clone());
-            }
-            values
+            validated_live_candidate_texts(
+                &reading,
+                converter
+                    .convert_scored(&reading, &context, request.num_candidates.max(1))
+                    .unwrap_or_default(),
+            )
         } else {
             vec![reading.clone()]
         };
@@ -272,4 +281,40 @@ fn chunk_index(chunks: &[ComposingChunk], cursor_pos: usize) -> usize {
         }
     }
     chunks.len().saturating_sub(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model_candidate(text: &str) -> ModelCandidate {
+        ModelCandidate {
+            text: text.to_string(),
+            score: None,
+        }
+    }
+
+    #[test]
+    fn invalid_top_kana_rewrite_is_removed_from_live_candidates() {
+        let candidates = validated_live_candidate_texts(
+            "だけど",
+            vec![
+                model_candidate("だし"),
+                model_candidate("ダケド"),
+                model_candidate("だけど"),
+            ],
+        );
+
+        assert_eq!(candidates, ["ダケド", "だけど"]);
+    }
+
+    #[test]
+    fn raw_reading_is_used_when_every_live_model_candidate_is_invalid() {
+        let candidates = validated_live_candidate_texts(
+            "だけど",
+            vec![model_candidate("だし"), model_candidate("なので")],
+        );
+
+        assert_eq!(candidates, ["だけど"]);
+    }
 }

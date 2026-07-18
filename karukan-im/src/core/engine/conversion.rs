@@ -11,7 +11,9 @@ use crate::core::engine::long_conversion::{
     MAX_FINAL_CANDIDATES, MAX_SEARCH_STATES, MAX_SEGMENT_CANDIDATES, RankedText,
     combine_segment_options, split_conversion_reading,
 };
-use crate::core::engine::morphology::{SurfaceSegment, segment_live_surface};
+use crate::core::engine::morphology::{
+    SurfaceSegment, model_candidate_preserves_reading, segment_live_surface,
+};
 
 /// Maximum number of learning candidates to show
 const MAX_LEARNING_CANDIDATES: usize = 3;
@@ -247,7 +249,11 @@ impl InputMethodEngine {
         );
 
         let start = Instant::now();
-        let candidates = converter.convert_blocking(&katakana, api_context, candidate_count);
+        let candidates = converter
+            .convert_blocking(&katakana, api_context, candidate_count)
+            .into_iter()
+            .filter(|candidate| model_candidate_preserves_reading(&candidate.text, reading))
+            .collect();
 
         self.metrics.conversion_ms += start.elapsed().as_millis() as u64;
         self.metrics.model_name = model_name;

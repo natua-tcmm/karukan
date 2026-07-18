@@ -82,6 +82,37 @@ fn contains_kanji(text: &str) -> bool {
     })
 }
 
+/// Whether a model candidate should survive the conservative reading check.
+///
+/// Kana-only output can be checked exactly after width/script normalization,
+/// so a free-form rewrite such as `だけど` → `だし` is rejected while
+/// `ダケド` and `ﾀﾞｹﾄﾞ` remain valid. Kanji output is kept conservatively:
+/// tokenizing a surface in isolation cannot disambiguate readings such as
+/// `後` (`あと` / `のち`), and rejecting those would damage names and places.
+pub(super) fn model_candidate_preserves_reading(surface: &str, reading: &str) -> bool {
+    if surface.is_empty() || reading.is_empty() {
+        return false;
+    }
+    let normalized_surface = karukan_engine::normalize_nfkc(surface);
+    let is_kana_only = normalized_surface.chars().all(|ch| {
+        matches!(
+            ch,
+            '\u{3041}'..='\u{3096}'
+                | '\u{309D}'..='\u{309F}'
+                | '\u{30A1}'..='\u{30FA}'
+                | '\u{30FC}'
+                | '\u{30FD}'..='\u{30FF}'
+        )
+    });
+    if !is_kana_only {
+        return true;
+    }
+
+    let normalized_reading =
+        karukan_engine::katakana_to_hiragana(&karukan_engine::normalize_nfkc(reading));
+    karukan_engine::katakana_to_hiragana(&normalized_surface) == normalized_reading
+}
+
 fn fallback_reading(surface: &str) -> Option<String> {
     if contains_kanji(surface) {
         None
@@ -247,6 +278,30 @@ pub(super) fn segment_live_surface(surface: &str, reading: &str) -> Option<Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_kana_rewrite_that_changes_the_reading() {
+        assert!(!model_candidate_preserves_reading("だし", "だけど"));
+    }
+
+    #[test]
+    fn accepts_matching_kana_across_width_and_script_variants() {
+        assert!(model_candidate_preserves_reading("だけど", "だけど"));
+        assert!(model_candidate_preserves_reading("ダケド", "だけど"));
+        assert!(model_candidate_preserves_reading("ﾀﾞｹﾄﾞ", "だけど"));
+    }
+
+    #[test]
+    fn keeps_kanji_candidates_when_surface_reading_is_ambiguous() {
+        assert!(model_candidate_preserves_reading("後", "あと"));
+        assert!(model_candidate_preserves_reading("後", "のち"));
+    }
+
+    #[test]
+    fn keeps_non_kana_candidates_that_need_a_richer_reading_check() {
+        assert!(model_candidate_preserves_reading("1つ", "ひとつ"));
+        assert!(model_candidate_preserves_reading("後だし", "あと"));
+    }
 
     #[test]
     fn segments_the_live_surface_with_ipadic_boundaries() {
