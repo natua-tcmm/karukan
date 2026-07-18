@@ -253,7 +253,7 @@ fn exhausting_composing_candidates_segments_the_live_first_surface() {
 }
 
 #[test]
-fn unalignable_whole_surface_remains_a_single_segment() {
+fn mismatched_region_is_distributed_without_moving_exact_suffix() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};
 
@@ -278,14 +278,29 @@ fn unalignable_whole_surface_remains_a_single_segment() {
         CandidateList::from_strings_with_reading(["東京都駅"], "とうきょうえき"),
     );
 
-    assert_eq!(session.segments.len(), 1);
+    assert_eq!(session.segments.len(), 3);
     assert_eq!(session.selected_text(), "東京都駅");
     assert_eq!(session.preedit().text(), "東京都駅");
-    assert_eq!(session.segments[0].reading, "とうきょうえき");
+    assert_eq!(
+        session.segments[..2]
+            .iter()
+            .map(|segment| segment.reading.as_str())
+            .collect::<String>(),
+        "とうきょう"
+    );
+    assert_eq!(
+        session.segments[..2]
+            .iter()
+            .map(|segment| segment.selected_text())
+            .collect::<String>(),
+        "東京都"
+    );
+    assert_eq!(session.segments[2].reading, "えき");
+    assert_eq!(session.segments[2].selected_text(), "駅");
 }
 
 #[test]
-fn surface_with_a_mismatched_morphological_reading_stays_whole() {
+fn mismatched_morphological_reading_is_approximated_only_for_that_token() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};
 
@@ -310,9 +325,14 @@ fn surface_with_a_mismatched_morphological_reading_stays_whole() {
         CandidateList::from_strings_with_reading(["東京ミステリー駅"], "とうきょうなぞえき"),
     );
 
-    assert_eq!(session.segments.len(), 1);
+    assert_eq!(session.segments.len(), 3);
     assert_eq!(session.selected_text(), "東京ミステリー駅");
-    assert_eq!(session.segments[0].reading, "とうきょうなぞえき");
+    assert_eq!(session.segments[0].reading, "とうきょう");
+    assert_eq!(session.segments[0].selected_text(), "東京");
+    assert_eq!(session.segments[1].reading, "なぞ");
+    assert_eq!(session.segments[1].selected_text(), "ミステリー");
+    assert_eq!(session.segments[2].reading, "えき");
+    assert_eq!(session.segments[2].selected_text(), "駅");
 }
 
 #[test]

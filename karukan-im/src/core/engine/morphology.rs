@@ -2,9 +2,9 @@
 //!
 //! Partial conversion boundaries must come from the most likely converted
 //! sentence, not from an independently segmented reading. Lindera's embedded
-//! IPADIC provides MeCab-style surface tokens and their readings. We only use
-//! the result when every token reading maps exactly and consecutively onto the
-//! original composing reading; an uncertain mapping stays as one whole span.
+//! IPADIC provides MeCab-style surface tokens and their readings. Exact token
+//! readings anchor the original composing reading; only mismatched tokens get
+//! an approximate reading span.
 
 use std::ops::Range;
 use std::sync::OnceLock;
@@ -19,6 +19,35 @@ pub(super) struct SurfaceSegment {
     pub reading_range: Range<usize>,
     pub reading: String,
     pub surface: String,
+}
+
+#[derive(Debug)]
+struct AnalyzedToken {
+    surface: String,
+    reading: Option<Vec<char>>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct AlignmentScore {
+    mismatched_tokens: usize,
+    edit_distance: usize,
+    length_delta: usize,
+}
+
+impl AlignmentScore {
+    fn add(self, other: Self) -> Self {
+        Self {
+            mismatched_tokens: self.mismatched_tokens + other.mismatched_tokens,
+            edit_distance: self.edit_distance + other.edit_distance,
+            length_delta: self.length_delta + other.length_delta,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AlignmentState {
+    score: AlignmentScore,
+    previous_reading_end: usize,
 }
 
 static TOKENIZER: OnceLock<Result<Tokenizer, String>> = OnceLock::new();
@@ -61,13 +90,104 @@ fn fallback_reading(surface: &str) -> Option<String> {
     }
 }
 
+fn edit_distance(left: &[char], right: &[char]) -> usize {
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
+
+    for (left_index, left_char) in left.iter().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right.iter().enumerate() {
+            current[right_index + 1] = if left_char == right_char {
+                previous[right_index]
+            } else {
+                1 + previous[right_index]
+                    .min(previous[right_index + 1])
+                    .min(current[right_index])
+            };
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right.len()]
+}
+
+fn token_score(token: &AnalyzedToken, assigned_reading: &[char]) -> AlignmentScore {
+    let Some(expected) = token.reading.as_deref() else {
+        let surface_len = token.surface.chars().count();
+        return AlignmentScore {
+            mismatched_tokens: 1,
+            edit_distance: surface_len.abs_diff(assigned_reading.len()),
+            length_delta: surface_len.abs_diff(assigned_reading.len()),
+        };
+    };
+    let distance = edit_distance(expected, assigned_reading);
+    AlignmentScore {
+        mismatched_tokens: usize::from(distance != 0),
+        edit_distance: distance,
+        length_delta: expected.len().abs_diff(assigned_reading.len()),
+    }
+}
+
+/// Assign the original reading across the surface tokens.
+///
+/// The dynamic program first minimizes the number of mismatched tokens. This
+/// keeps exact words on both sides fixed and makes the smallest possible local
+/// region absorb a model/dictionary reading discrepancy. Edit distance and
+/// length difference resolve ties inside that region. A surface token that has
+/// no counterpart in the input may receive an empty range; it is merged into
+/// its neighboring correction segment afterwards.
+fn align_to_original_reading(
+    tokens: &[AnalyzedToken],
+    reading_chars: &[char],
+) -> Option<Vec<Range<usize>>> {
+    if tokens.is_empty() || reading_chars.is_empty() {
+        return None;
+    }
+
+    let mut states = vec![vec![None::<AlignmentState>; reading_chars.len() + 1]; tokens.len() + 1];
+    states[0][0] = Some(AlignmentState {
+        score: AlignmentScore::default(),
+        previous_reading_end: 0,
+    });
+
+    for token_index in 0..tokens.len() {
+        for reading_start in 0..=reading_chars.len() {
+            let Some(previous) = states[token_index][reading_start] else {
+                continue;
+            };
+            for reading_end in reading_start..=reading_chars.len() {
+                let score = previous.score.add(token_score(
+                    &tokens[token_index],
+                    &reading_chars[reading_start..reading_end],
+                ));
+                let next = &mut states[token_index + 1][reading_end];
+                if next.is_none_or(|current| score < current.score) {
+                    *next = Some(AlignmentState {
+                        score,
+                        previous_reading_end: reading_start,
+                    });
+                }
+            }
+        }
+    }
+
+    let mut reading_end = reading_chars.len();
+    let mut ranges = vec![0..0; tokens.len()];
+    for token_index in (0..tokens.len()).rev() {
+        let state = states[token_index + 1][reading_end]?;
+        ranges[token_index] = state.previous_reading_end..reading_end;
+        reading_end = state.previous_reading_end;
+    }
+    (reading_end == 0).then_some(ranges)
+}
+
 /// Split the first (live) conversion surface and align every token reading to
 /// the original hiragana buffer.
 ///
-/// IPADIC's eighth detail field is the dictionary reading. Unknown kanji cannot
-/// be mapped safely, while kana, punctuation, spaces, and Latin text can use
-/// their surface as a lossless fallback. Any mismatch rejects the entire
-/// analysis instead of manufacturing a boundary from character counts.
+/// IPADIC's eighth detail field is the dictionary reading. Kana, punctuation,
+/// spaces, and Latin text can use their surface as a lossless fallback.
+/// Unknown kanji and reading mismatches are assigned only the local span left
+/// between exact neighboring tokens.
 pub(super) fn segment_live_surface(surface: &str, reading: &str) -> Option<Vec<SurfaceSegment>> {
     if surface.is_empty() || reading.is_empty() {
         return None;
@@ -79,35 +199,49 @@ pub(super) fn segment_live_surface(surface: &str, reading: &str) -> Option<Vec<S
         return None;
     }
 
-    let reading_chars: Vec<char> = reading.chars().collect();
-    let mut reading_start = 0;
-    let mut segments = Vec::with_capacity(tokens.len());
-
+    let mut analyzed = Vec::with_capacity(tokens.len());
     for token in &mut tokens {
         let surface = token.text.to_string();
         let dictionary_reading = token
             .get_detail(7)
             .filter(|value| !value.is_empty() && *value != "*" && *value != "UNK")
             .map(karukan_engine::katakana_to_hiragana);
-        let token_reading = dictionary_reading.or_else(|| fallback_reading(&surface))?;
-        let token_chars: Vec<char> = token_reading.chars().collect();
-        let reading_end = reading_start + token_chars.len();
+        analyzed.push(AnalyzedToken {
+            reading: dictionary_reading
+                .or_else(|| fallback_reading(&surface))
+                .map(|reading| reading.chars().collect()),
+            surface,
+        });
+    }
 
-        if reading_end > reading_chars.len()
-            || reading_chars[reading_start..reading_end] != token_chars
-        {
-            return None;
+    let reading_chars: Vec<char> = reading.chars().collect();
+    let ranges = align_to_original_reading(&analyzed, &reading_chars)?;
+    let mut segments = Vec::<SurfaceSegment>::with_capacity(analyzed.len());
+    let mut leading_surface = String::new();
+    for (token, reading_range) in analyzed.into_iter().zip(ranges) {
+        if reading_range.is_empty() {
+            if let Some(previous) = segments.last_mut() {
+                previous.surface.push_str(&token.surface);
+            } else {
+                leading_surface.push_str(&token.surface);
+            }
+            continue;
         }
 
+        let token_reading: String = reading_chars[reading_range.clone()].iter().collect();
+        let surface = if leading_surface.is_empty() {
+            token.surface
+        } else {
+            leading_surface.push_str(&token.surface);
+            std::mem::take(&mut leading_surface)
+        };
         segments.push(SurfaceSegment {
-            reading_range: reading_start..reading_end,
+            reading_range,
             reading: token_reading,
             surface,
         });
-        reading_start = reading_end;
     }
-
-    (reading_start == reading_chars.len()).then_some(segments)
+    (!segments.is_empty()).then_some(segments)
 }
 
 #[cfg(test)]
@@ -132,8 +266,42 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_surface_whose_analysis_does_not_match_the_input_reading() {
-        assert!(segment_live_surface("東京ミステリー駅", "とうきょうなぞえき").is_none());
+    fn assigns_only_the_mismatched_token_an_approximate_reading() {
+        let segments = segment_live_surface("東京ミステリー駅", "とうきょうなぞえき").unwrap();
+
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| (segment.surface.as_str(), segment.reading.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("東京", "とうきょう"),
+                ("ミステリー", "なぞ"),
+                ("駅", "えき")
+            ]
+        );
+    }
+
+    #[test]
+    fn distributes_a_mismatched_region_without_moving_an_exact_suffix() {
+        let segments = segment_live_surface("東京都駅", "とうきょうえき").unwrap();
+
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| segment.surface.as_str())
+                .collect::<String>(),
+            "東京都駅"
+        );
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| segment.reading.as_str())
+                .collect::<String>(),
+            "とうきょうえき"
+        );
+        assert_eq!(segments.last().unwrap().surface, "駅");
+        assert_eq!(segments.last().unwrap().reading, "えき");
     }
 
     #[test]
