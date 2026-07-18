@@ -394,12 +394,8 @@ fn shift_left_splits_a_single_conversion_segment() {
     assert_eq!(session.segments[0].reading_range, 0..7);
     assert_eq!(session.segments[1].reading, "く");
     assert_eq!(session.segments[1].reading_range, 7..8);
-    assert!(
-        session
-            .segments
-            .iter()
-            .all(|segment| segment.candidates_dirty)
-    );
+    assert!(!session.segments[0].candidates_dirty);
+    assert!(session.segments[1].candidates_dirty);
     assert!(
         session
             .segments
@@ -501,7 +497,7 @@ fn boundary_resize_preserves_surface_only_with_an_exact_alignment() {
 }
 
 #[test]
-fn candidate_navigation_rebuilds_only_a_dirty_active_segment() {
+fn boundary_resize_shows_the_same_candidate_list_used_by_first_navigation() {
     use crate::core::keycode::KeyModifiers;
     use crate::core::state::ConversionSession;
 
@@ -513,13 +509,42 @@ fn candidate_navigation_rebuilds_only_a_dirty_active_segment() {
         ),
     };
     let shift_left = KeyEvent::new(Keysym::LEFT, KeyModifiers::new().with_shift(true), true);
-    engine.process_key(&shift_left);
+    let resize = engine.process_key(&shift_left);
+    let shown_after_resize = resize
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            EngineAction::ShowCandidates(candidates) => Some(
+                candidates
+                    .candidates()
+                    .iter()
+                    .map(|candidate| candidate.text.clone())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .unwrap();
 
-    engine.process_key(&press_key(Keysym::SPACE));
+    let navigate = engine.process_key(&press_key(Keysym::SPACE));
+    let shown_after_navigation = navigate
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            EngineAction::ShowCandidates(candidates) => Some(
+                candidates
+                    .candidates()
+                    .iter()
+                    .map(|candidate| candidate.text.clone())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .unwrap();
     let InputState::Conversion { session } = engine.state() else {
         panic!("conversion state expected");
     };
 
+    assert_eq!(shown_after_resize, shown_after_navigation);
     assert!(!session.segments[0].candidates_dirty);
     assert!(session.segments[0].candidates.len() > 1);
     assert!(session.segments[1].candidates_dirty);

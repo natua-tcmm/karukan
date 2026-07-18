@@ -1040,7 +1040,7 @@ impl InputMethodEngine {
     }
 
     fn move_conversion_segment(&mut self, right: bool) -> EngineResult {
-        let candidates = {
+        {
             let InputState::Conversion { session } = &mut self.state else {
                 return EngineResult::not_consumed();
             };
@@ -1049,7 +1049,14 @@ impl InputMethodEngine {
             } else {
                 session.move_active_left();
             }
-            session.candidates().cloned().unwrap_or_default()
+        }
+        // A resized neighboring segment may still have only its lightweight
+        // boundary candidates. Build its final list before showing it, so the
+        // next navigation key never silently replaces the visible list.
+        self.refresh_active_segment_candidates_if_dirty();
+        let candidates = match &self.state {
+            InputState::Conversion { session } => session.candidates().cloned().unwrap_or_default(),
+            _ => return EngineResult::not_consumed(),
         };
         self.update_conversion_preedit(&candidates)
     }
@@ -1164,7 +1171,8 @@ impl InputMethodEngine {
     /// the next segment. Shrinking the final (or only) segment creates a new
     /// trailing segment. Expanding through a one-character next segment merges
     /// it into the active segment. The visible surface is preserved and model
-    /// alternatives are rebuilt only when the user next navigates candidates.
+    /// alternatives for the active segment are rebuilt before the resized
+    /// state is shown, so the first navigation key uses the visible list.
     fn resize_conversion_segment(&mut self, expand: bool) -> EngineResult {
         let proposal = {
             let InputState::Conversion { session } = &self.state else {
@@ -1254,7 +1262,7 @@ impl InputMethodEngine {
         let left_candidates = candidate_lists.next().unwrap_or_default();
         let right_candidates = candidate_lists.next();
 
-        let candidates = {
+        {
             let InputState::Conversion { session } = &mut self.state else {
                 return EngineResult::not_consumed();
             };
@@ -1282,9 +1290,15 @@ impl InputMethodEngine {
             } else {
                 session.segments.remove(index + 1);
             }
+            session.finish_whole_candidate_phase();
             debug_assert!(session.ranges_are_valid());
             session.rebuild_preedit();
-            session.candidates().cloned().unwrap_or_default()
+        }
+
+        self.refresh_active_segment_candidates_if_dirty();
+        let candidates = match &self.state {
+            InputState::Conversion { session } => session.candidates().cloned().unwrap_or_default(),
+            _ => return EngineResult::not_consumed(),
         };
         self.update_conversion_preedit(&candidates)
     }
