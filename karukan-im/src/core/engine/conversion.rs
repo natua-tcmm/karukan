@@ -218,21 +218,25 @@ impl InputMethodEngine {
             return EngineResult::consumed();
         }
 
-        // Get candidates from kanji converter (use full num_candidates for explicit conversion)
+        // Whole-reading conversion intentionally exposes only three choices.
+        // Rejecting all three transitions to segmented correction instead of
+        // walking an unbounded whole-sentence beam.
         let mut candidates =
-            self.build_conversion_candidates(&reading, self.config.num_candidates, skip_learning);
+            self.build_conversion_candidates(&reading, WHOLE_CANDIDATE_LIMIT, skip_learning);
 
-        // If the previous auto-suggest result is not in the new candidates, insert it at the top.
-        let seen: HashSet<&str> = candidates.iter().map(|c| c.text.as_str()).collect();
-        if !prev_suggest_text.is_empty()
-            && prev_suggest_text != reading
-            && !seen.contains(prev_suggest_text.as_str())
-        {
-            candidates.insert(
-                0,
-                ConversionCandidate::new(prev_suggest_text, CandidateSource::Model),
-            );
+        // Candidate 1 must be exactly what live conversion was displaying.
+        // Preserve source metadata when fresh inference emitted the same text.
+        if !prev_suggest_text.is_empty() {
+            let candidate = candidates
+                .iter()
+                .position(|candidate| candidate.text == prev_suggest_text)
+                .map(|index| candidates.remove(index))
+                .unwrap_or_else(|| {
+                    ConversionCandidate::new(&prev_suggest_text, CandidateSource::Model)
+                });
+            candidates.insert(0, candidate);
         }
+        candidates.truncate(WHOLE_CANDIDATE_LIMIT);
 
         if candidates.is_empty() {
             // No candidates, stay in hiragana mode
@@ -256,14 +260,48 @@ impl InputMethodEngine {
                 .map(|candidate| candidate.into_ui_candidate(&reading))
                 .collect(),
         );
-        let session = self.build_initial_conversion_session(&reading, candidate_list);
+        let session =
+            crate::core::state::ConversionSession::single(reading.clone(), candidate_list);
         self.enter_conversion_state(session)
     }
 
+    /// Exhaust the composing-time whole-reading candidates and enter segmented
+    /// correction directly.
+    pub(super) fn start_segmented_conversion_from_composing(&mut self) -> EngineResult {
+        self.flush_romaji_to_composed();
+        let reading = self.input_buf.text.clone();
+        if reading.is_empty() {
+            return EngineResult::consumed();
+        }
+        let fallback_candidates = self
+            .composing_candidates
+            .clone()
+            .unwrap_or_else(|| CandidateList::from_strings_with_reading([&reading], &reading));
+
+        self.converters.romaji.reset();
+        self.live.text.clear();
+        self.clear_composing_candidates();
+        self.input_buf.cursor_pos = 0;
+
+        let mut session = self.build_conversion_session(&reading, fallback_candidates, false);
+        session.finish_whole_candidate_phase();
+        self.enter_conversion_state(session)
+    }
+
+    #[cfg(test)]
     pub(super) fn build_initial_conversion_session(
         &mut self,
         reading: &str,
         full_candidates: CandidateList,
+    ) -> crate::core::state::ConversionSession {
+        self.build_conversion_session(reading, full_candidates, true)
+    }
+
+    fn build_conversion_session(
+        &mut self,
+        reading: &str,
+        full_candidates: CandidateList,
+        preserve_whole_surface: bool,
     ) -> crate::core::state::ConversionSession {
         #[derive(Debug)]
         struct InitialSegment {
@@ -274,7 +312,9 @@ impl InputMethodEngine {
             from_dictionary: bool,
         }
 
-        let preserved_candidate = full_candidates.selected().cloned();
+        let preserved_candidate = preserve_whole_surface
+            .then(|| full_candidates.selected().cloned())
+            .flatten();
         let Some(path) = self.dictionary_lattice_paths(reading, 1).into_iter().next() else {
             return self.single_segment_session_with_learning(reading, full_candidates);
         };
@@ -1444,7 +1484,34 @@ impl InputMethodEngine {
 
     /// Select next candidate
     fn next_candidate(&mut self) -> EngineResult {
+        let exhausted_whole_candidates = matches!(
+            &self.state,
+            InputState::Conversion { session }
+                if session.is_whole_candidate_phase()
+                    && session
+                        .candidates()
+                        .is_some_and(|candidates| candidates.cursor() + 1 >= candidates.len())
+        );
+        if exhausted_whole_candidates {
+            return self.activate_segmented_conversion();
+        }
         self.navigate_candidate(CandidateList::move_next)
+    }
+
+    fn activate_segmented_conversion(&mut self) -> EngineResult {
+        let Some((reading, fallback_candidates)) = (match &self.state {
+            InputState::Conversion { session } => session
+                .candidates()
+                .cloned()
+                .map(|candidates| (session.reading.clone(), candidates)),
+            _ => None,
+        }) else {
+            return EngineResult::not_consumed();
+        };
+
+        let mut session = self.build_conversion_session(&reading, fallback_candidates, false);
+        session.finish_whole_candidate_phase();
+        self.enter_conversion_state(session)
     }
 
     /// Select previous candidate

@@ -73,6 +73,31 @@ fn single_hiragana_is_live_text_and_first_candidate_before_model_alternatives() 
 }
 
 #[test]
+fn multi_character_live_text_is_first_and_whole_candidates_are_limited_to_three() {
+    let mut engine = make_live_conversion_engine();
+    learn(&mut engine, "しよう", "私用");
+    engine.input_buf.text = "しよう".to_string();
+    engine.input_buf.cursor_pos = 3;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("しよう"),
+        romaji_buffer: String::new(),
+    };
+    engine.chunks = vec![ComposingChunk {
+        reading: "しよう".to_string(),
+        converted: "使用".to_string(),
+        candidates: vec!["使用".to_string(), "仕様".to_string(), "しよう".to_string()],
+    }];
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(engine.preedit().unwrap().text(), "使用");
+    assert_eq!(candidates.first().map(String::as_str), Some("使用"));
+    assert_eq!(candidates.len(), WHOLE_CANDIDATE_LIMIT);
+    assert!(candidates.iter().any(|candidate| candidate == "私用"));
+}
+
+#[test]
 fn single_hiragana_is_first_explicit_conversion_candidate() {
     let mut engine = InputMethodEngine::new();
     learn(&mut engine, "し", "詩");
@@ -109,10 +134,8 @@ fn test_live_text_preserved_in_conversion_via_space() {
 
     // The candidate list should contain "愛"
     let candidates = engine.state().candidates().unwrap();
-    assert!(
-        candidates.candidates().iter().any(|c| c.text == "愛"),
-        "AI inference result '愛' should be in the candidate list"
-    );
+    assert_eq!(candidates.selected_text(), Some("愛"));
+    assert_eq!(candidates.len(), WHOLE_CANDIDATE_LIMIT);
 }
 
 #[test]
@@ -155,6 +178,26 @@ fn down_selects_visible_composing_candidate_like_tab() {
 
     let commit = engine.process_key(&press_key(Keysym::RETURN));
     assert_eq!(commit_text(&commit), Some("アイ"));
+}
+
+#[test]
+fn up_first_selects_the_visible_composing_candidate_without_jumping_to_the_end() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    let visible = engine
+        .composing_candidates
+        .as_ref()
+        .and_then(CandidateList::selected_text)
+        .unwrap()
+        .to_string();
+
+    let result = engine.process_key(&press_key(Keysym::UP));
+
+    assert!(result.consumed);
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), visible);
 }
 
 #[test]

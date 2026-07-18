@@ -17,6 +17,17 @@ fn append_candidates_dedup(target: &mut Vec<Candidate>, source: Vec<Candidate>) 
     }
 }
 
+/// Move `text` to candidate 1 while preserving metadata from an existing
+/// candidate. Insert `fallback` when no source emitted the text.
+fn promote_composing_candidate(candidates: &mut Vec<Candidate>, text: &str, fallback: Candidate) {
+    let candidate = candidates
+        .iter()
+        .position(|candidate| candidate.text == text)
+        .map(|index| candidates.remove(index))
+        .unwrap_or(fallback);
+    candidates.insert(0, candidate);
+}
+
 /// Keep the typed hiragana itself at index 0 for a one-character reading.
 ///
 /// If another source already emitted the same text, preserve that candidate's
@@ -31,12 +42,15 @@ fn prioritize_single_hiragana_candidate(
         return;
     }
 
-    let candidate = candidates
-        .iter()
-        .position(|candidate| candidate.text == reading)
-        .map(|index| candidates.remove(index))
-        .unwrap_or_else(|| Candidate::with_reading(reading, reading));
-    candidates.insert(0, candidate);
+    promote_composing_candidate(
+        candidates,
+        reading,
+        Candidate::with_reading(reading, reading),
+    );
+}
+
+fn limit_whole_candidates(candidates: &mut Vec<Candidate>) {
+    candidates.truncate(WHOLE_CANDIDATE_LIMIT);
 }
 
 impl InputMethodEngine {
@@ -88,6 +102,7 @@ impl InputMethodEngine {
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
             append_candidates_dedup(&mut all_candidates, self.lookup_rewriter_variants(&reading));
             prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
+            limit_whole_candidates(&mut all_candidates);
             if all_candidates.is_empty() {
                 self.clear_composing_candidates();
                 return EngineResult::consumed()
@@ -123,7 +138,14 @@ impl InputMethodEngine {
                 .collect();
             append_candidates_dedup(&mut all_candidates, model_candidates);
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
+            let live_text = self.live.text.clone();
+            promote_composing_candidate(
+                &mut all_candidates,
+                &live_text,
+                Candidate::with_reading(&live_text, &reading),
+            );
             prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
+            limit_whole_candidates(&mut all_candidates);
             let aux = self.format_aux_suggest(&self.input_buf.text.clone());
             let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
             return EngineResult::consumed()
@@ -146,6 +168,7 @@ impl InputMethodEngine {
         // Then dictionary candidates
         append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
         prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
+        limit_whole_candidates(&mut all_candidates);
         let aux = self.format_aux_suggest(&self.input_buf.text.clone());
         let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
         EngineResult::consumed()
@@ -304,8 +327,9 @@ impl InputMethodEngine {
             Keysym::F8 => self.commit_composing_as(ComposingCommitForm::HalfKatakana),
             Keysym::SPACE if self.input_mode == InputMode::Alphabet => self.input_char(' '),
             Keysym::TAB | Keysym::DOWN => self.select_next_composing_candidate(),
-            Keysym::UP if self.composing_candidate_selected => {
-                self.select_prev_composing_candidate()
+            Keysym::UP => self.select_prev_composing_candidate(),
+            Keysym::SPACE if self.composing_candidate_selected => {
+                self.select_next_composing_candidate()
             }
             Keysym::SPACE => self.start_conversion(false),
             Keysym::LEFT => self.move_caret_left(),
@@ -429,6 +453,9 @@ impl InputMethodEngine {
             return EngineResult::not_consumed();
         }
         if self.composing_candidate_selected {
+            if candidates.cursor() + 1 >= candidates.len() {
+                return self.start_segmented_conversion_from_composing();
+            }
             candidates.move_next();
         } else {
             self.composing_candidate_selected = true;
@@ -443,8 +470,11 @@ impl InputMethodEngine {
         if candidates.is_empty() {
             return EngineResult::not_consumed();
         }
-        candidates.move_prev();
-        self.composing_candidate_selected = true;
+        if self.composing_candidate_selected {
+            candidates.move_prev();
+        } else {
+            self.composing_candidate_selected = true;
+        }
         self.update_composing_candidate_selection(candidates)
     }
 

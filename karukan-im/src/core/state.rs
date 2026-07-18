@@ -60,6 +60,10 @@ pub struct ConversionSession {
     pub reading: String,
     pub segments: Vec<ConversionSegment>,
     pub active_segment: usize,
+    /// True while the user is walking the three whole-reading candidates.
+    /// Once those are exhausted, conversion stays in segmented mode even if
+    /// the dictionary cannot produce more than one segment.
+    whole_candidate_phase: bool,
     preedit: Preedit,
 }
 
@@ -72,6 +76,7 @@ impl ConversionSession {
             reading: reading.clone(),
             segments: vec![ConversionSegment::new(0..reading_len, reading, candidates)],
             active_segment: 0,
+            whole_candidate_phase: true,
             preedit: Preedit::from_segments(
                 vec![PreeditSegment::highlighted(selected)],
                 selected_len,
@@ -84,6 +89,7 @@ impl ConversionSession {
             reading,
             segments,
             active_segment: 0,
+            whole_candidate_phase: false,
             preedit: Preedit::new(),
         };
         debug_assert!(session.ranges_are_valid());
@@ -113,6 +119,14 @@ impl ConversionSession {
 
     pub fn candidates_mut(&mut self) -> Option<&mut CandidateList> {
         self.active_mut().map(|segment| &mut segment.candidates)
+    }
+
+    pub fn is_whole_candidate_phase(&self) -> bool {
+        self.whole_candidate_phase
+    }
+
+    pub fn finish_whole_candidate_phase(&mut self) {
+        self.whole_candidate_phase = false;
     }
 
     pub fn selected_text(&self) -> String {

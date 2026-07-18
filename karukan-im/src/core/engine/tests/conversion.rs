@@ -149,6 +149,60 @@ fn best_lattice_path_initializes_conversion_segments() {
 }
 
 #[test]
+fn fourth_forward_selection_switches_from_three_whole_candidates_to_segments() {
+    use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
+    use karukan_engine::{DictionaryCategory, DictionarySource};
+
+    let entry = |reading: &str, surface: &str| {
+        NormalizedDictionaryEntry::new(
+            reading,
+            surface,
+            0.0,
+            DictionarySource::Mozc,
+            DictionaryCategory::General,
+            None,
+        )
+        .unwrap()
+    };
+    let dictionary =
+        Dictionary::build_from_normalized([entry("とうきょう", "東京"), entry("えき", "駅")])
+            .unwrap();
+    let mut engine = InputMethodEngine::new();
+    engine.dicts.system = Some(dictionary);
+    engine.input_buf.text = "とうきょうえき".to_string();
+    engine.input_buf.cursor_pos = 7;
+    engine.live.text = "東京駅".to_string();
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("東京駅"),
+        romaji_buffer: String::new(),
+    };
+
+    engine.process_key(&press_key(Keysym::SPACE));
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("whole conversion expected");
+    };
+    assert!(session.is_whole_candidate_phase());
+    assert_eq!(session.segments.len(), 1);
+    assert_eq!(session.candidates().unwrap().len(), WHOLE_CANDIDATE_LIMIT);
+    assert_eq!(
+        session.candidates().unwrap().selected_text(),
+        Some("東京駅")
+    );
+
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::SPACE));
+
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("segmented conversion expected");
+    };
+    assert!(!session.is_whole_candidate_phase());
+    assert_eq!(session.segments.len(), 2);
+    assert_eq!(session.segments[0].reading, "とうきょう");
+    assert_eq!(session.segments[1].reading, "えき");
+}
+
+#[test]
 fn unalignable_whole_surface_remains_a_single_segment() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};

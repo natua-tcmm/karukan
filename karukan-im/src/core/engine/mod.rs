@@ -32,6 +32,9 @@ use super::preedit::{AttributeType, Preedit, PreeditAttribute};
 use super::state::InputState;
 use crate::config::settings::Settings;
 
+/// Whole-reading alternatives shown before bunsetsu correction takes over.
+const WHOLE_CANDIDATE_LIMIT: usize = 3;
+
 /// Source of a conversion candidate
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CandidateSource {
