@@ -11,7 +11,7 @@ mod init;
 mod input;
 mod input_buffer;
 mod long_conversion;
-mod surface_alignment;
+mod morphology;
 mod types;
 
 pub use types::*;

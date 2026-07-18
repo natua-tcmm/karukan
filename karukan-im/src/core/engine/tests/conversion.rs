@@ -106,7 +106,7 @@ fn dictionary_lattice_emits_multiple_candidates_for_multiple_segments() {
 }
 
 #[test]
-fn best_lattice_path_initializes_conversion_segments() {
+fn live_surface_morphology_initializes_conversion_segments() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};
 
@@ -149,7 +149,7 @@ fn best_lattice_path_initializes_conversion_segments() {
 }
 
 #[test]
-fn exhausting_whole_candidates_enters_segments_without_changing_the_surface() {
+fn exhausting_whole_candidates_segments_the_live_first_surface() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};
 
@@ -201,12 +201,13 @@ fn exhausting_whole_candidates_enters_segments_without_changing_the_surface() {
     assert_eq!(session.segments.len(), 2);
     assert_eq!(session.segments[0].reading, "とうきょう");
     assert_eq!(session.segments[1].reading, "えき");
-    assert_eq!(session.selected_text(), surface_before_segmentation);
-    assert_eq!(session.preedit().text(), surface_before_segmentation);
+    assert_ne!(surface_before_segmentation, "東京駅");
+    assert_eq!(session.selected_text(), "東京駅");
+    assert_eq!(session.preedit().text(), "東京駅");
 }
 
 #[test]
-fn exhausting_composing_candidates_enters_segments_without_changing_the_surface() {
+fn exhausting_composing_candidates_segments_the_live_first_surface() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};
 
@@ -233,7 +234,7 @@ fn exhausting_composing_candidates_enters_segments_without_changing_the_surface(
         romaji_buffer: String::new(),
     };
     let mut candidates = CandidateList::from_strings_with_reading(
-        ["とうきょうえき", "トウキョウエキ", "東京駅"],
+        ["東京駅", "とうきょうえき", "トウキョウエキ"],
         "とうきょうえき",
     );
     candidates.select(2);
@@ -284,7 +285,7 @@ fn unalignable_whole_surface_remains_a_single_segment() {
 }
 
 #[test]
-fn ambiguous_middle_is_merged_while_exact_neighbors_stay_segmented() {
+fn surface_with_a_mismatched_morphological_reading_stays_whole() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};
 
@@ -309,20 +310,9 @@ fn ambiguous_middle_is_merged_while_exact_neighbors_stay_segmented() {
         CandidateList::from_strings_with_reading(["東京ミステリー駅"], "とうきょうなぞえき"),
     );
 
-    assert_eq!(session.segments.len(), 3);
+    assert_eq!(session.segments.len(), 1);
     assert_eq!(session.selected_text(), "東京ミステリー駅");
-    assert_eq!(session.segments[0].reading, "とうきょう");
-    assert_eq!(session.segments[0].selected_text(), "東京");
-    assert_eq!(session.segments[1].reading, "なぞ");
-    assert_eq!(session.segments[1].selected_text(), "ミステリー");
-    assert_eq!(session.segments[2].reading, "えき");
-    assert_eq!(session.segments[2].selected_text(), "駅");
-    assert!(
-        session
-            .segments
-            .iter()
-            .all(|segment| { segment.candidates.candidates()[0].text == segment.selected_text() })
-    );
+    assert_eq!(session.segments[0].reading, "とうきょうなぞえき");
 }
 
 #[test]
@@ -344,8 +334,8 @@ fn long_live_surface_enters_segmented_mode_without_changing_text() {
     let dictionary =
         Dictionary::build_from_normalized([entry("とうきょう", "東京"), entry("えき", "駅")])
             .unwrap();
-    let reading = "とうきょうなぞえき".repeat(4);
-    let surface = "東京ミステリー駅".repeat(4);
+    let reading = "ほんらいのようといがいでは".repeat(4);
+    let surface = "本来の用途以外では".repeat(4);
     assert!(reading.chars().count() > EngineConfig::default().composing_chunk_len);
 
     let mut engine = make_live_conversion_engine();
@@ -411,15 +401,17 @@ fn initial_segmentation_aligns_each_surface_with_its_reading() {
         CandidateList::from_strings_with_reading(["隣の客は"], "となりのきゃくは"),
     );
 
-    assert_eq!(session.segments.len(), 3);
+    assert_eq!(session.segments.len(), 4);
     assert_eq!(session.selected_text(), "隣の客は");
     assert_eq!(session.segments[0].reading, "となり");
     assert_eq!(session.segments[0].selected_text(), "隣");
     assert_eq!(session.segments[1].reading, "の");
     assert_eq!(session.segments[1].selected_text(), "の");
     assert_eq!(session.segments[1].candidates.selected_text(), Some("の"));
-    assert_eq!(session.segments[2].reading, "きゃくは");
-    assert_eq!(session.segments[2].selected_text(), "客は");
+    assert_eq!(session.segments[2].reading, "きゃく");
+    assert_eq!(session.segments[2].selected_text(), "客");
+    assert_eq!(session.segments[3].reading, "は");
+    assert_eq!(session.segments[3].selected_text(), "は");
 }
 
 #[test]

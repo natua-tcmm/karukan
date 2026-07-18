@@ -11,9 +11,7 @@ use crate::core::engine::long_conversion::{
     MAX_FINAL_CANDIDATES, MAX_SEARCH_STATES, MAX_SEGMENT_CANDIDATES, RankedText,
     combine_segment_options, split_conversion_reading,
 };
-use crate::core::engine::surface_alignment::{
-    PartialSurfaceAlignment, partially_align_surface_to_candidates,
-};
+use crate::core::engine::morphology::segment_live_surface;
 
 /// Maximum number of learning candidates to show
 const MAX_LEARNING_CANDIDATES: usize = 3;
@@ -338,50 +336,21 @@ impl InputMethodEngine {
         reading: &str,
         full_candidates: CandidateList,
     ) -> crate::core::state::ConversionSession {
-        #[derive(Debug)]
-        struct InitialSegment {
-            start: usize,
-            end: usize,
-            reading: String,
-            surface: String,
-            from_dictionary: bool,
-        }
-
-        let preserved_candidate = full_candidates.selected().cloned();
-        let Some(path) = self.dictionary_lattice_paths(reading, 1).into_iter().next() else {
+        // Candidate 1 is the exact live-conversion result. Candidate navigation
+        // may currently be highlighting candidate 2 or 3, but partial
+        // conversion must derive stable boundaries from the most likely
+        // sentence rather than from whichever whole candidate was viewed last.
+        let Some(live_candidate) = full_candidates.candidates().first().cloned() else {
             return self.single_segment_session_with_learning(reading, full_candidates);
         };
-        if !path.segments.iter().any(|segment| segment.source.is_some()) {
+        let Some(initial) = segment_live_surface(&live_candidate.text, reading) else {
             return self.single_segment_session_with_learning(reading, full_candidates);
-        }
-
-        // Unknown fallback edges are one character wide in the lattice. Merge
-        // adjacent unknowns so an uncovered phrase remains one usable segment.
-        let mut initial = Vec::<InitialSegment>::new();
-        for segment in path.segments {
-            if segment.source.is_none()
-                && let Some(previous) = initial.last_mut()
-                && !previous.from_dictionary
-                && previous.end == segment.char_start
-            {
-                previous.end = segment.char_end;
-                previous.reading.push_str(&segment.reading);
-                previous.surface.push_str(&segment.surface);
-                continue;
-            }
-            initial.push(InitialSegment {
-                start: segment.char_start,
-                end: segment.char_end,
-                reading: segment.reading,
-                surface: segment.surface,
-                from_dictionary: segment.source.is_some(),
-            });
-        }
+        };
         if initial.len() <= 1 {
             return self.single_segment_session_with_learning(reading, full_candidates);
         }
 
-        let mut prepared_candidates = Vec::with_capacity(initial.len());
+        let mut segments = Vec::with_capacity(initial.len());
         for (index, initial_segment) in initial.iter().enumerate() {
             let left_hint = index
                 .checked_sub(1)
@@ -409,147 +378,21 @@ impl InputMethodEngine {
                 left_hint.as_deref(),
                 right_hint.as_deref(),
             );
-
-            let candidates = if candidates
-                .candidates()
-                .iter()
-                .any(|candidate| candidate.text == initial_segment.surface)
-            {
-                candidates
-            } else {
-                let mut values = candidates.candidates().to_vec();
-                values.push(Candidate {
-                    text: initial_segment.surface.clone(),
-                    reading: Some(initial_segment.reading.clone()),
-                    source_label: initial_segment
-                        .from_dictionary
-                        .then(|| CandidateSource::Dictionary.label().to_string()),
-                    description: None,
-                });
-                CandidateList::new(values)
-            };
-            prepared_candidates.push(candidates);
-        }
-
-        let Some(preserved_candidate) = preserved_candidate else {
-            return self.single_segment_session_with_learning(reading, full_candidates);
-        };
-        // Exact alignment is the common path and avoids the more expensive
-        // partial search. The latter is reserved for mixed/long surfaces
-        // where only some independently generated segment candidates match.
-        let alignment =
-            align_surface_to_candidates(&preserved_candidate.text, &prepared_candidates)
-                .map(|indices| {
-                    let mut surface_start = 0;
-                    indices
-                        .into_iter()
-                        .enumerate()
-                        .map(|(segment_index, candidate_index)| {
-                            let surface_end = surface_start
-                                + prepared_candidates[segment_index].candidates()[candidate_index]
-                                    .text
-                                    .chars()
-                                    .count();
-                            let piece = PartialSurfaceAlignment::Exact {
-                                segment_index,
-                                candidate_index,
-                                surface_range: surface_start..surface_end,
-                            };
-                            surface_start = surface_end;
-                            piece
-                        })
-                        .collect()
-                })
-                .or_else(|| {
-                    partially_align_surface_to_candidates(
-                        &preserved_candidate.text,
-                        &prepared_candidates,
-                    )
-                });
-        let Some(alignment) = alignment else {
-            return self.single_segment_session_with_learning(reading, full_candidates);
-        };
-        let exact_segments = alignment
-            .iter()
-            .filter(|piece| matches!(piece, PartialSurfaceAlignment::Exact { .. }))
-            .count();
-        // A single anchor cannot tell us which side owns the unmatched
-        // surface (`東京 / 都駅` vs `東京都 / 駅`). Keep the whole span intact
-        // unless at least two exact anchors bound the ambiguous region.
-        if alignment.len() <= 1 || exact_segments < 2 {
-            return self.single_segment_session_with_learning(reading, full_candidates);
-        }
-
-        let reading_chars: Vec<char> = reading.chars().collect();
-        let surface_chars: Vec<char> = preserved_candidate.text.chars().collect();
-        let mut segments = Vec::with_capacity(alignment.len());
-        for piece in alignment {
-            let (initial_range, surface_range, candidates) = match piece {
-                PartialSurfaceAlignment::Exact {
-                    segment_index,
-                    candidate_index,
-                    surface_range,
-                } => {
-                    let mut candidates = prepared_candidates[segment_index].clone();
-                    candidates.select(candidate_index);
-                    (segment_index..segment_index + 1, surface_range, candidates)
-                }
-                PartialSurfaceAlignment::Unmatched {
-                    segment_range,
-                    surface_range,
-                } => {
-                    let first = &initial[segment_range.start];
-                    let last = &initial[segment_range.end - 1];
-                    let merged_reading: String =
-                        reading_chars[first.start..last.end].iter().collect();
-                    let left_hint = surface_range
-                        .start
-                        .checked_sub(1)
-                        .and_then(|index| surface_chars.get(index))
-                        .map(|ch| ch.to_string())
-                        .or_else(|| self.editor_left_hint());
-                    let right_hint = surface_chars
-                        .get(surface_range.end)
-                        .map(|ch| ch.to_string())
-                        .or_else(|| self.editor_right_hint());
-                    let base_candidates = CandidateList::new(
-                        self.build_conversion_candidates(
-                            &merged_reading,
-                            MAX_SEGMENT_CANDIDATES,
-                            false,
-                        )
-                        .into_iter()
-                        .map(|candidate| candidate.into_ui_candidate(&merged_reading))
-                        .collect(),
-                    );
-                    let (candidates, _) = self.prepend_segment_learning(
-                        &merged_reading,
-                        base_candidates,
-                        left_hint.as_deref(),
-                        right_hint.as_deref(),
-                    );
-                    (segment_range, surface_range, candidates)
-                }
-            };
-
-            let first = &initial[initial_range.start];
-            let last = &initial[initial_range.end - 1];
-            let reading_range = first.start..last.end;
-            let segment_reading: String = reading_chars[reading_range.clone()].iter().collect();
-            let segment_surface: String = surface_chars[surface_range].iter().collect();
-            let candidates = pin_current_surface(candidates, &segment_surface, &segment_reading);
+            let candidates = pin_current_surface(
+                candidates,
+                &initial_segment.surface,
+                &initial_segment.reading,
+            );
             segments.push(crate::core::state::ConversionSegment::new(
-                reading_range,
-                segment_reading,
+                initial_segment.reading_range.clone(),
+                initial_segment.reading.clone(),
                 candidates,
             ));
         }
-        if segments.len() <= 1 {
-            return self.single_segment_session_with_learning(reading, full_candidates);
-        }
+
         let session =
             crate::core::state::ConversionSession::segmented(reading.to_string(), segments);
-        debug_assert_eq!(session.selected_text(), preserved_candidate.text);
+        debug_assert_eq!(session.selected_text(), live_candidate.text);
         session
     }
 

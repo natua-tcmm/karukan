@@ -52,8 +52,9 @@ impl ConversionSegment {
 
 /// Complete state for an explicit kana-kanji conversion.
 ///
-/// Commit 12 starts with one segment covering the whole reading. Later
-/// commits split it into dictionary-lattice bunsetsu without changing the
+/// Conversion starts with one segment covering the whole reading. After the
+/// three whole-reading candidates are exhausted, the live first result is
+/// morphologically segmented for partial correction without changing the
 /// outer state-machine representation.
 #[derive(Debug, Clone)]
 pub struct ConversionSession {

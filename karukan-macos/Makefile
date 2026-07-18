@@ -44,6 +44,7 @@ bundle: build
 	cp .build/release/KarukanIME $(APP)/Contents/MacOS/
 	cp $(CARGO_TARGET)/release/karukan-imserver $(APP)/Contents/MacOS/
 	cp -r resources/* $(APP)/Contents/Resources/
+	cp ../THIRD_PARTY_LICENSES $(APP)/Contents/Resources/
 	codesign --force --deep --sign - $(APP)
 
 # Download the prebuilt system dictionary unless one is already installed.

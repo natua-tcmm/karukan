@@ -37,6 +37,7 @@ impl InputMethodEngine {
         self.init_user_dictionaries();
         self.init_learning_cache(settings.learning.enabled, settings.learning.max_entries);
         self.init_segment_learning_cache(settings.learning.enabled, settings.learning.max_entries);
+        super::morphology::warm_up();
 
         let n_threads = settings.conversion.n_threads;
 
