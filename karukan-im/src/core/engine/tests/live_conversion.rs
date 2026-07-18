@@ -29,7 +29,7 @@ fn test_live_conversion_off_unchanged() {
 }
 
 #[test]
-fn test_live_conversion_escape_is_noop_in_composing() {
+fn test_live_conversion_escape_restores_raw_unconfirmed_reading() {
     // Escape is reserved for conversion-mode cancel; during composing the IME
     // leaves the current input/live text untouched.
     let mut engine = make_live_conversion_engine();
@@ -41,16 +41,22 @@ fn test_live_conversion_escape_is_noop_in_composing() {
     // Simulate live conversion being active
     engine.live.text = "愛".to_string();
 
-    // Press Escape -> should pass through without changing composing state.
+    // Press Escape -> consume it and restore the raw unconfirmed reading.
     let result = engine.process_key(&press_key(Keysym::ESCAPE));
-    assert!(!result.consumed);
-    assert_eq!(engine.live.text, "愛");
+    assert!(result.consumed);
+    assert!(engine.live.text.is_empty());
     assert!(matches!(engine.state(), InputState::Composing { .. }));
     assert_eq!(engine.preedit().unwrap().text(), "あい");
+    assert!(
+        result
+            .actions
+            .iter()
+            .any(|action| matches!(action, EngineAction::HideCandidates))
+    );
 }
 
 #[test]
-fn test_live_conversion_escape_twice_still_noop() {
+fn test_live_conversion_escape_twice_keeps_raw_unconfirmed_reading() {
     let mut engine = make_live_conversion_engine();
 
     engine.process_key(&press('a'));
@@ -59,14 +65,17 @@ fn test_live_conversion_escape_twice_still_noop() {
     // Set live conversion text
     engine.live.text = "愛".to_string();
 
-    // Escape no longer clears/cancels composing input.
-    engine.process_key(&press_key(Keysym::ESCAPE));
+    let first = engine.process_key(&press_key(Keysym::ESCAPE));
+    assert!(first.consumed);
     assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.live.text, "愛");
+    assert!(engine.live.text.is_empty());
+    assert_eq!(engine.preedit().unwrap().text(), "あい");
 
-    engine.process_key(&press_key(Keysym::ESCAPE));
+    let second = engine.process_key(&press_key(Keysym::ESCAPE));
+    assert!(second.consumed);
     assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.live.text, "愛");
+    assert!(engine.live.text.is_empty());
+    assert_eq!(engine.preedit().unwrap().text(), "あい");
 }
 
 #[test]

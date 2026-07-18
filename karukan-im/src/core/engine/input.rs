@@ -319,12 +319,16 @@ impl InputMethodEngine {
 
         match key.keysym {
             Keysym::RETURN => self.commit_composing(),
+            Keysym::ESCAPE if self.live.enabled && self.input_mode == InputMode::Hiragana => {
+                self.cancel_live_composing()
+            }
             Keysym::ESCAPE => EngineResult::not_consumed(),
             Keysym::BACKSPACE => self.backspace_composing(),
             Keysym::DELETE => self.delete_composing(),
             Keysym::F6 => self.commit_composing_as(ComposingCommitForm::Hiragana),
             Keysym::F7 => self.commit_composing_as(ComposingCommitForm::FullKatakana),
             Keysym::F8 => self.commit_composing_as(ComposingCommitForm::HalfKatakana),
+            Keysym::F9 | Keysym::F10 => EngineResult::consumed(),
             Keysym::SPACE if self.input_mode == InputMode::Alphabet => self.input_char(' '),
             Keysym::TAB | Keysym::DOWN => self.select_next_composing_candidate(),
             Keysym::UP => self.select_prev_composing_candidate(),
@@ -365,6 +369,20 @@ impl InputMethodEngine {
                 EngineResult::not_consumed()
             }
         }
+    }
+
+    /// Leave live/candidate selection while keeping the raw reading as an
+    /// ordinary unconfirmed hiragana preedit.
+    fn cancel_live_composing(&mut self) -> EngineResult {
+        self.live.text.clear();
+        self.clear_composing_candidates();
+        self.chunks.clear();
+        let preedit = self.set_composing_state();
+
+        EngineResult::consumed()
+            .with_action(EngineAction::UpdatePreedit(preedit))
+            .with_action(EngineAction::HideCandidates)
+            .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()))
     }
 
     /// Begin a new emoji-shortcode composing session.

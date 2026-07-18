@@ -91,6 +91,24 @@ fn single_character_f6_f7_f8_commit_before_clearing_live_preedit() {
 }
 
 #[test]
+fn f9_and_f10_are_consumed_noops_while_composing() {
+    for key in [Keysym::F9, Keysym::F10] {
+        let mut engine = make_live_conversion_engine();
+        engine.process_key(&press('a'));
+        engine.live.text = "亜".to_string();
+        let before = engine.preedit().unwrap().text().to_string();
+
+        let result = engine.process_key(&press_key(key));
+
+        assert!(result.consumed);
+        assert!(result.actions.is_empty());
+        assert_eq!(engine.preedit().unwrap().text(), before);
+        assert_eq!(engine.live.text, "亜");
+        assert!(matches!(engine.state(), InputState::Composing { .. }));
+    }
+}
+
+#[test]
 fn ctrl_k_is_not_a_katakana_shortcut() {
     let mut engine = InputMethodEngine::new();
 
