@@ -17,6 +17,9 @@ pub struct ConversionSegment {
     /// Surface currently shown for this segment. Kept separately from the
     /// candidate cursor so rebuilding alternatives never changes the preedit.
     selected_surface: String,
+    /// The reading boundary changed and alternatives must be rebuilt before
+    /// the next candidate-navigation operation.
+    pub candidates_dirty: bool,
     /// Whether the user explicitly changed this segment during conversion.
     pub explicitly_modified: bool,
 }
@@ -29,6 +32,7 @@ impl ConversionSegment {
             reading,
             candidates,
             selected_surface,
+            candidates_dirty: false,
             explicitly_modified: false,
         }
     }

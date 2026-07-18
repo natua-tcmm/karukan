@@ -299,7 +299,97 @@ fn shift_left_splits_a_single_conversion_segment() {
     assert_eq!(session.segments[0].reading_range, 0..7);
     assert_eq!(session.segments[1].reading, "く");
     assert_eq!(session.segments[1].reading_range, 7..8);
+    assert_eq!(session.selected_text(), "十中八九");
+    assert_eq!(session.preedit().text(), "十中八九");
+    assert!(
+        session
+            .segments
+            .iter()
+            .all(|segment| segment.candidates_dirty)
+    );
+    assert!(
+        session
+            .segments
+            .iter()
+            .all(|segment| !segment.explicitly_modified)
+    );
     assert!(session.ranges_are_valid());
+}
+
+#[test]
+fn shift_right_merges_a_one_character_trailing_segment() {
+    use crate::core::keycode::KeyModifiers;
+    use crate::core::state::ConversionSession;
+
+    let mut engine = InputMethodEngine::new();
+    engine.state = InputState::Conversion {
+        session: ConversionSession::single(
+            "じっちゅうはっく".into(),
+            CandidateList::from_strings(["十中八九"]),
+        ),
+    };
+    let shift_left = KeyEvent::new(Keysym::LEFT, KeyModifiers::new().with_shift(true), true);
+    let shift_right = KeyEvent::new(Keysym::RIGHT, KeyModifiers::new().with_shift(true), true);
+
+    engine.process_key(&shift_left);
+    engine.process_key(&shift_right);
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("conversion state expected");
+    };
+
+    assert_eq!(session.segments.len(), 1);
+    assert_eq!(session.segments[0].reading_range, 0..8);
+    assert_eq!(session.selected_text(), "十中八九");
+    assert_eq!(session.preedit().text(), "十中八九");
+    assert!(session.ranges_are_valid());
+}
+
+#[test]
+fn candidate_navigation_rebuilds_only_a_dirty_active_segment() {
+    use crate::core::keycode::KeyModifiers;
+    use crate::core::state::ConversionSession;
+
+    let mut engine = InputMethodEngine::new();
+    engine.state = InputState::Conversion {
+        session: ConversionSession::single(
+            "じっちゅうはっく".into(),
+            CandidateList::from_strings(["十中八九"]),
+        ),
+    };
+    let shift_left = KeyEvent::new(Keysym::LEFT, KeyModifiers::new().with_shift(true), true);
+    engine.process_key(&shift_left);
+
+    engine.process_key(&press_key(Keysym::SPACE));
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("conversion state expected");
+    };
+
+    assert!(!session.segments[0].candidates_dirty);
+    assert!(session.segments[0].candidates.len() > 1);
+    assert!(session.segments[1].candidates_dirty);
+    assert_ne!(session.segments[0].selected_text(), "十中八");
+}
+
+#[test]
+fn resizing_boundaries_does_not_enter_segment_learning() {
+    use crate::core::keycode::KeyModifiers;
+    use crate::core::state::ConversionSession;
+
+    let mut engine = InputMethodEngine::new();
+    engine.segment_learning = Some(karukan_engine::SegmentLearningCache::new(100));
+    engine.state = InputState::Conversion {
+        session: ConversionSession::single(
+            "じっちゅうはっく".into(),
+            CandidateList::from_strings(["十中八九"]),
+        ),
+    };
+    let shift_left = KeyEvent::new(Keysym::LEFT, KeyModifiers::new().with_shift(true), true);
+    engine.process_key(&shift_left);
+    engine.process_key(&press_key(Keysym::RETURN));
+
+    let cache = engine.segment_learning.as_ref().unwrap();
+    assert!(cache.lookup("じっちゅうはっ", None, Some("九")).is_empty());
+    assert!(cache.lookup("く", Some("八"), None).is_empty());
 }
 
 #[test]
