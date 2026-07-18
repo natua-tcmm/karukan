@@ -61,6 +61,16 @@ class EngineClient {
         return keyResultSync(method: "process_key", params: params, timeout: 3.0)
     }
 
+    func pollLiveConversionAsync(completion: @escaping (KeyResult?) -> Void) {
+        sendRequest(method: "poll_live_conversion", params: [:]) { data in
+            guard let data else {
+                completion(nil)
+                return
+            }
+            completion(try? makeProtocolDecoder().decode(KeyResult.self, from: data))
+        }
+    }
+
     func commitSync() -> KeyResult? {
         keyResultSync(method: "commit", params: [:], timeout: 1.0)
     }

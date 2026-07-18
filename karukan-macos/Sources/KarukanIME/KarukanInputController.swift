@@ -14,6 +14,9 @@ class KarukanInputController: IMKInputController {
     /// Mirrors whether the engine currently shows a preedit (updated from
     /// engine actions). Used to decide when to refresh surrounding text.
     private var hasPreedit = false
+    private weak var activeClient: AnyObject?
+    private var livePollTimer: DispatchSourceTimer?
+    private var livePollInFlight = false
 
     // MARK: - Event handling
 
@@ -25,6 +28,7 @@ class KarukanInputController: IMKInputController {
         guard let event else { return false }
         guard event.type == .keyDown else { return false }
         guard let client = sender as? (any IMKTextInput) else { return false }
+        activeClient = client as AnyObject
 
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         // Never swallow Command shortcuts.
@@ -73,6 +77,7 @@ class KarukanInputController: IMKInputController {
     // MARK: - Lifecycle
 
     override func deactivateServer(_ sender: Any!) {
+        stopLivePolling()
         // Mozc-style: commit the pending preedit on focus loss, then
         // persist what the user taught us.
         if let client = sender as? (any IMKTextInput) {
@@ -85,6 +90,7 @@ class KarukanInputController: IMKInputController {
     }
 
     override func commitComposition(_ sender: Any!) {
+        stopLivePolling()
         if let client = sender as? (any IMKTextInput) {
             flushComposition(client: client)
         } else {
@@ -135,6 +141,11 @@ class KarukanInputController: IMKInputController {
             case .updatePreedit(let text, let caret, let attributes):
                 hasPreedit = !text.isEmpty
                 setMarkedText(text: text, caret: caret, attributes: attributes, client: client)
+                if hasPreedit {
+                    startLivePolling()
+                } else {
+                    stopLivePolling()
+                }
 
             case .showCandidates(let candidates, let cursor, let page, let totalPages):
                 Self.candidateWindow.onSelect = { [weak self] pageIndex in
@@ -165,6 +176,40 @@ class KarukanInputController: IMKInputController {
 
             case .updateAux, .hideAux:
                 break  // applied above
+            }
+        }
+    }
+
+    private func startLivePolling() {
+        guard livePollTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + .milliseconds(50), repeating: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
+            self?.pollLiveConversion()
+        }
+        livePollTimer = timer
+        timer.resume()
+    }
+
+    private func stopLivePolling() {
+        livePollTimer?.cancel()
+        livePollTimer = nil
+        livePollInFlight = false
+    }
+
+    private func pollLiveConversion() {
+        guard hasPreedit, !livePollInFlight,
+            let client = activeClient as? (any IMKTextInput)
+        else { return }
+        livePollInFlight = true
+        engineClient.pollLiveConversionAsync { [weak self, weak clientObject = client as AnyObject] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.livePollInFlight = false
+                guard let client = clientObject as? (any IMKTextInput),
+                    let result, !result.actions.isEmpty
+                else { return }
+                self.apply(actions: result.actions, client: client)
             }
         }
     }

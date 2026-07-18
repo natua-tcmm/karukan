@@ -28,6 +28,20 @@ pub extern "C" fn karukan_engine_process_key(
     if result.consumed { 1 } else { 0 }
 }
 
+/// Poll for a completed background live-conversion update.
+/// Returns 1 when actions were applied to the FFI caches.
+#[unsafe(no_mangle)]
+pub extern "C" fn karukan_engine_poll_live_conversion(engine: *mut KarukanEngine) -> c_int {
+    let engine = ffi_mut!(engine, 0);
+    let Some(result) = engine.engine.poll_live_conversion() else {
+        return 0;
+    };
+    engine.clear_flags();
+    engine.apply_actions(result.actions);
+    engine.sync_timing();
+    1
+}
+
 /// Apply a candidate from the currently displayed page to the active segment.
 /// The conversion remains active until Enter or an explicit commit.
 #[unsafe(no_mangle)]

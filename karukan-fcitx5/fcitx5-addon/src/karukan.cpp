@@ -12,7 +12,7 @@
 
 namespace fcitx {
 
-static_assert(KARUKAN_FFI_API_VERSION == 2, "Karukan C header/API mismatch");
+static_assert(KARUKAN_FFI_API_VERSION == 3, "Karukan C header/API mismatch");
 
 // X11 modifier bitmask constants matching the Rust FFI boundary (KeyModifiers::*_MASK).
 constexpr uint32_t kShiftMask = 1;    // ShiftMask
@@ -89,9 +89,19 @@ void KarukanCandidateList::updateCandidates(::KarukanEngine* rustEngine) {
 KarukanState::KarukanState(KarukanEngine* engine, InputContext* ic) : engine_(engine), ic_(ic) {
     // Create Rust engine instance
     rustEngine_ = karukan_engine_new();
+    livePollTimer_ = engine_->instance()->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 50000, 0,
+        [this](EventSourceTime* time, uint64_t) {
+            time->setNextInterval(50000);
+            if (rustEngine_ && karukan_engine_poll_live_conversion(rustEngine_)) {
+                updateUI();
+            }
+            return true;
+        });
 }
 
 KarukanState::~KarukanState() {
+    livePollTimer_.reset();
     if (rustEngine_) {
         karukan_engine_free(rustEngine_);
     }

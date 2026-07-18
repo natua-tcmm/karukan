@@ -10,7 +10,7 @@
 
 #include <stdint.h>
 
-#define KARUKAN_FFI_API_VERSION 2
+#define KARUKAN_FFI_API_VERSION 3
 
 #ifdef __cplusplus
 extern "C" {
@@ -58,6 +58,12 @@ int karukan_engine_process_key(
     uint32_t state,
     int is_release
 );
+
+/*
+ * Poll for a completed background live-conversion result.
+ * Returns 1 when preedit/candidate actions are available, 0 otherwise.
+ */
+int karukan_engine_poll_live_conversion(KarukanEngine* engine);
 
 /*
  * Apply a 0-based candidate from the visible page to the active conversion

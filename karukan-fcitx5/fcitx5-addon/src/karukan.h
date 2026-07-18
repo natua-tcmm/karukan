@@ -10,6 +10,7 @@
 #include <fcitx/candidatelist.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/inputmethodengine.h>
+#include <fcitx-utils/event.h>
 #include <fcitx/instance.h>
 
 // Include the Rust FFI header
@@ -60,6 +61,7 @@ private:
     InputContext* ic_;
     ::KarukanEngine* rustEngine_{nullptr};
     bool engineInitialized_{false};
+    std::unique_ptr<EventSourceTime> livePollTimer_;
 };
 
 // Main engine class
