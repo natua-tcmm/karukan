@@ -120,6 +120,21 @@ impl CandidateBuilder {
         self.candidates.is_empty()
     }
 
+    /// Move `text` to the front while preserving its existing source metadata.
+    /// Insert `fallback` when no source emitted the text.
+    fn promote(&mut self, text: &str, fallback: ConversionCandidate) {
+        let candidate = self
+            .candidates
+            .iter()
+            .position(|candidate| candidate.text == text)
+            .map(|index| self.candidates.remove(index))
+            .unwrap_or_else(|| {
+                self.seen.insert(text.to_string());
+                fallback
+            });
+        self.candidates.insert(0, candidate);
+    }
+
     fn into_candidates(mut self) -> Vec<ConversionCandidate> {
         let count = self.candidates.len();
         for (index, candidate) in self.candidates.iter_mut().enumerate() {
@@ -817,6 +832,16 @@ impl InputMethodEngine {
                         .with_description(description),
                 );
             }
+        }
+
+        // A one-character hiragana reading is safer and more useful as the
+        // default than an aggressive learned/model/dictionary conversion.
+        // Keep every alternative, but pin the raw reading to candidate 1.
+        if should_prioritize_single_hiragana(self.input_mode, reading) {
+            builder.promote(
+                reading,
+                ConversionCandidate::new(reading, CandidateSource::Fallback),
+            );
         }
 
         // 7. Enrich Fallback candidates whose text is a known symbol with

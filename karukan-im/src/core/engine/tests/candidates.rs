@@ -1,4 +1,5 @@
 use super::*;
+use karukan_engine::LearningCache;
 
 // --- Candidate preservation tests ---
 
@@ -7,6 +8,87 @@ fn commit_text(result: &EngineResult) -> Option<&str> {
         EngineAction::Commit(text) => Some(text.as_str()),
         _ => None,
     })
+}
+
+fn shown_candidate_texts(result: &EngineResult) -> Vec<String> {
+    result
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            EngineAction::ShowCandidates(candidates) => Some(
+                candidates
+                    .candidates()
+                    .iter()
+                    .map(|candidate| candidate.text.clone())
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn learn(engine: &mut InputMethodEngine, reading: &str, surface: &str) {
+    let mut cache = LearningCache::new(100);
+    cache.record(reading, surface);
+    engine.learning = Some(cache);
+}
+
+#[test]
+fn single_hiragana_is_first_composing_candidate() {
+    let mut engine = InputMethodEngine::new();
+    learn(&mut engine, "し", "詩");
+
+    engine.process_key(&press('s'));
+    let result = engine.process_key(&press('i'));
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(engine.preedit().unwrap().text(), "し");
+    assert_eq!(candidates.first().map(String::as_str), Some("し"));
+    assert!(candidates.iter().any(|candidate| candidate == "詩"));
+}
+
+#[test]
+fn single_hiragana_is_live_text_and_first_candidate_before_model_alternatives() {
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = "し".to_string();
+    engine.input_buf.cursor_pos = 1;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("し"),
+        romaji_buffer: String::new(),
+    };
+    engine.chunks = vec![ComposingChunk {
+        reading: "し".to_string(),
+        converted: "詩".to_string(),
+        candidates: vec!["詩".to_string(), "市".to_string()],
+    }];
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(engine.live.text, "し");
+    assert_eq!(engine.preedit().unwrap().text(), "し");
+    assert_eq!(candidates.first().map(String::as_str), Some("し"));
+    assert!(candidates.iter().any(|candidate| candidate == "詩"));
+    assert!(candidates.iter().any(|candidate| candidate == "市"));
+}
+
+#[test]
+fn single_hiragana_is_first_explicit_conversion_candidate() {
+    let mut engine = InputMethodEngine::new();
+    learn(&mut engine, "し", "詩");
+
+    engine.process_key(&press('s'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press_key(Keysym::SPACE));
+
+    let candidates = engine.state().candidates().unwrap();
+    assert_eq!(candidates.selected_text(), Some("し"));
+    assert!(
+        candidates
+            .candidates()
+            .iter()
+            .any(|candidate| candidate.text == "詩")
+    );
 }
 
 #[test]

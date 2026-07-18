@@ -189,6 +189,18 @@ pub struct InputMethodEngine {
     segment_learning: Option<SegmentLearningCache>,
 }
 
+/// Whether a raw one-character hiragana reading should outrank learned,
+/// model, and dictionary candidates.
+///
+/// This is intentionally limited to Hiragana mode. A one-character buffer in
+/// Katakana, Alphabet, or Emoji mode must keep that mode's normal display and
+/// candidate ordering.
+fn should_prioritize_single_hiragana(input_mode: InputMode, reading: &str) -> bool {
+    input_mode == InputMode::Hiragana
+        && reading.chars().count() == 1
+        && karukan_engine::is_pure_hiragana(reading)
+}
+
 impl InputMethodEngine {
     /// Create a new IME engine
     pub fn new() -> Self {

@@ -17,6 +17,28 @@ fn append_candidates_dedup(target: &mut Vec<Candidate>, source: Vec<Candidate>) 
     }
 }
 
+/// Keep the typed hiragana itself at index 0 for a one-character reading.
+///
+/// If another source already emitted the same text, preserve that candidate's
+/// metadata while moving it to the front. Otherwise add a plain reading
+/// candidate without discarding any learned/model/dictionary alternatives.
+fn prioritize_single_hiragana_candidate(
+    input_mode: InputMode,
+    reading: &str,
+    candidates: &mut Vec<Candidate>,
+) {
+    if !should_prioritize_single_hiragana(input_mode, reading) {
+        return;
+    }
+
+    let candidate = candidates
+        .iter()
+        .position(|candidate| candidate.text == reading)
+        .map(|index| candidates.remove(index))
+        .unwrap_or_else(|| Candidate::with_reading(reading, reading));
+    candidates.insert(0, candidate);
+}
+
 impl InputMethodEngine {
     /// Refresh the input state: rebuild preedit and run auto-suggest for candidates.
     pub(super) fn refresh_input_state(&mut self) -> EngineResult {
@@ -55,12 +77,17 @@ impl InputMethodEngine {
             // No useful AI suggestion — still show learning + dictionary + rule-based
             // rewriter variants. The rewriter path produces mozc-style symbol variants
             // (e.g. `「` → `『`, `【`, ...) for symbol-only inputs where the model is skipped.
-            self.live.text.clear();
-            let preedit = self.set_composing_state();
             let reading = self.input_buf.text.clone();
+            if self.live.enabled && should_prioritize_single_hiragana(self.input_mode, &reading) {
+                self.live.text = reading.clone();
+            } else {
+                self.live.text.clear();
+            }
+            let preedit = self.set_composing_state();
             let mut all_candidates = self.lookup_learning_candidates(&reading);
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
             append_candidates_dedup(&mut all_candidates, self.lookup_rewriter_variants(&reading));
+            prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
             if all_candidates.is_empty() {
                 self.clear_composing_candidates();
                 return EngineResult::consumed()
@@ -77,7 +104,11 @@ impl InputMethodEngine {
 
         // Live conversion mode: show converted text in preedit
         if self.live.enabled && self.input_mode != InputMode::Katakana {
-            self.live.text = candidates[0].clone();
+            self.live.text = if should_prioritize_single_hiragana(self.input_mode, &reading) {
+                reading.clone()
+            } else {
+                candidates[0].clone()
+            };
             let preedit = self.set_composing_state();
 
             // Same candidate ordering as normal auto-suggest (learning → model →
@@ -92,6 +123,7 @@ impl InputMethodEngine {
                 .collect();
             append_candidates_dedup(&mut all_candidates, model_candidates);
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
+            prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
             let aux = self.format_aux_suggest(&self.input_buf.text.clone());
             let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
             return EngineResult::consumed()
@@ -113,6 +145,7 @@ impl InputMethodEngine {
         append_candidates_dedup(&mut all_candidates, model_candidates);
         // Then dictionary candidates
         append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
+        prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
         let aux = self.format_aux_suggest(&self.input_buf.text.clone());
         let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
         EngineResult::consumed()
