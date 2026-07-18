@@ -117,9 +117,10 @@ fn single_hiragana_is_first_explicit_conversion_candidate() {
 }
 
 #[test]
-fn test_live_text_preserved_in_conversion_via_space() {
+fn space_skips_the_live_first_candidate_and_starts_from_the_second() {
     // When Space is pressed during live conversion, the AI inference result
-    // (live_conversion_text) should appear in the candidate list.
+    // remains candidate 1, but it was already visible before Space. Explicit
+    // selection therefore starts from candidate 2.
     let mut engine = make_live_conversion_engine();
 
     // Simulate typing "あい" with live conversion active
@@ -132,9 +133,21 @@ fn test_live_text_preserved_in_conversion_via_space() {
     assert!(result.consumed);
     assert!(matches!(engine.state(), InputState::Conversion { .. }));
 
-    // The candidate list should contain "愛"
+    // The candidate list keeps "愛" first while selecting the next choice.
     let candidates = engine.state().candidates().unwrap();
-    assert_eq!(candidates.selected_text(), Some("愛"));
+    assert_eq!(
+        candidates
+            .candidates()
+            .first()
+            .map(|candidate| candidate.text.as_str()),
+        Some("愛")
+    );
+    assert_eq!(candidates.cursor(), 1);
+    assert_ne!(candidates.selected_text(), Some("愛"));
+    assert_eq!(
+        engine.preedit().map(Preedit::text),
+        candidates.selected_text()
+    );
     assert_eq!(candidates.len(), WHOLE_CANDIDATE_LIMIT);
 }
 

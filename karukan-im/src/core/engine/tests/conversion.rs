@@ -149,7 +149,7 @@ fn best_lattice_path_initializes_conversion_segments() {
 }
 
 #[test]
-fn fourth_forward_selection_switches_from_three_whole_candidates_to_segments() {
+fn exhausting_whole_candidates_enters_segments_without_changing_the_surface() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};
 
@@ -184,13 +184,14 @@ fn fourth_forward_selection_switches_from_three_whole_candidates_to_segments() {
     assert!(session.is_whole_candidate_phase());
     assert_eq!(session.segments.len(), 1);
     assert_eq!(session.candidates().unwrap().len(), WHOLE_CANDIDATE_LIMIT);
-    assert_eq!(
+    assert_eq!(session.candidates().unwrap().cursor(), 1);
+    assert_ne!(
         session.candidates().unwrap().selected_text(),
         Some("東京駅")
     );
 
     engine.process_key(&press_key(Keysym::SPACE));
-    engine.process_key(&press_key(Keysym::SPACE));
+    let surface_before_segmentation = engine.preedit().unwrap().text().to_string();
     engine.process_key(&press_key(Keysym::SPACE));
 
     let InputState::Conversion { session } = engine.state() else {
@@ -200,6 +201,54 @@ fn fourth_forward_selection_switches_from_three_whole_candidates_to_segments() {
     assert_eq!(session.segments.len(), 2);
     assert_eq!(session.segments[0].reading, "とうきょう");
     assert_eq!(session.segments[1].reading, "えき");
+    assert_eq!(session.selected_text(), surface_before_segmentation);
+    assert_eq!(session.preedit().text(), surface_before_segmentation);
+}
+
+#[test]
+fn exhausting_composing_candidates_enters_segments_without_changing_the_surface() {
+    use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
+    use karukan_engine::{DictionaryCategory, DictionarySource};
+
+    let entry = |reading: &str, surface: &str| {
+        NormalizedDictionaryEntry::new(
+            reading,
+            surface,
+            0.0,
+            DictionarySource::Mozc,
+            DictionaryCategory::General,
+            None,
+        )
+        .unwrap()
+    };
+    let dictionary =
+        Dictionary::build_from_normalized([entry("とうきょう", "東京"), entry("えき", "駅")])
+            .unwrap();
+    let mut engine = InputMethodEngine::new();
+    engine.dicts.system = Some(dictionary);
+    engine.input_buf.text = "とうきょうえき".to_string();
+    engine.input_buf.cursor_pos = 7;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("東京駅"),
+        romaji_buffer: String::new(),
+    };
+    let mut candidates = CandidateList::from_strings_with_reading(
+        ["とうきょうえき", "トウキョウエキ", "東京駅"],
+        "とうきょうえき",
+    );
+    candidates.select(2);
+    engine.composing_candidates = Some(candidates);
+    engine.composing_candidate_selected = true;
+
+    engine.process_key(&press_key(Keysym::SPACE));
+
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("segmented conversion expected");
+    };
+    assert!(!session.is_whole_candidate_phase());
+    assert_eq!(session.segments.len(), 2);
+    assert_eq!(session.selected_text(), "東京駅");
+    assert_eq!(session.preedit().text(), "東京駅");
 }
 
 #[test]

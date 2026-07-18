@@ -194,8 +194,9 @@ impl InputMethodEngine {
     /// Called when Space is pressed: flushes any pending romaji,
     /// resolves the reading, runs `build_conversion_candidates`, and
     /// transitions into the Conversion state. The previous live-conversion
-    /// result is preserved as the first model candidate so the user sees
-    /// the same text they had been looking at during input.
+    /// result is preserved as the first model candidate. Because that result
+    /// is already visible before Space, explicit conversion starts from the
+    /// second candidate when one exists.
     ///
     /// `skip_learning` remains available for internal/tests that need to inspect
     /// the learning-free branch; the normal key path keeps learning included.
@@ -254,12 +255,15 @@ impl InputMethodEngine {
         //   - `source_label` ← source.label() only (e.g. `🤖 AI`, `📚 辞書`)
         //   - `description`  ← the per-candidate description only
         //                      (e.g. `三点リーダ`, `[全]英大文字`)
-        let candidate_list = CandidateList::new(
+        let mut candidate_list = CandidateList::new(
             candidates
                 .into_iter()
                 .map(|candidate| candidate.into_ui_candidate(&reading))
                 .collect(),
         );
+        if !prev_suggest_text.is_empty() && candidate_list.len() > 1 {
+            candidate_list.select(1);
+        }
         let session =
             crate::core::state::ConversionSession::single(reading.clone(), candidate_list);
         self.enter_conversion_state(session)
@@ -283,7 +287,7 @@ impl InputMethodEngine {
         self.clear_composing_candidates();
         self.input_buf.cursor_pos = 0;
 
-        let mut session = self.build_conversion_session(&reading, fallback_candidates, false);
+        let mut session = self.build_conversion_session(&reading, fallback_candidates);
         session.finish_whole_candidate_phase();
         self.enter_conversion_state(session)
     }
@@ -294,14 +298,13 @@ impl InputMethodEngine {
         reading: &str,
         full_candidates: CandidateList,
     ) -> crate::core::state::ConversionSession {
-        self.build_conversion_session(reading, full_candidates, true)
+        self.build_conversion_session(reading, full_candidates)
     }
 
     fn build_conversion_session(
         &mut self,
         reading: &str,
         full_candidates: CandidateList,
-        preserve_whole_surface: bool,
     ) -> crate::core::state::ConversionSession {
         #[derive(Debug)]
         struct InitialSegment {
@@ -312,9 +315,7 @@ impl InputMethodEngine {
             from_dictionary: bool,
         }
 
-        let preserved_candidate = preserve_whole_surface
-            .then(|| full_candidates.selected().cloned())
-            .flatten();
+        let preserved_candidate = full_candidates.selected().cloned();
         let Some(path) = self.dictionary_lattice_paths(reading, 1).into_iter().next() else {
             return self.single_segment_session_with_learning(reading, full_candidates);
         };
@@ -1524,7 +1525,7 @@ impl InputMethodEngine {
             return EngineResult::not_consumed();
         };
 
-        let mut session = self.build_conversion_session(&reading, fallback_candidates, false);
+        let mut session = self.build_conversion_session(&reading, fallback_candidates);
         session.finish_whole_candidate_phase();
         self.enter_conversion_state(session)
     }
