@@ -12,6 +12,18 @@ fn committed_text(result: &EngineResult) -> Option<&str> {
     })
 }
 
+fn commit_precedes_preedit_clear(result: &EngineResult) -> bool {
+    let commit_index = result
+        .actions
+        .iter()
+        .position(|action| matches!(action, EngineAction::Commit(_)));
+    let clear_index = result.actions.iter().position(
+        |action| matches!(action, EngineAction::UpdatePreedit(preedit) if preedit.is_empty()),
+    );
+
+    matches!((commit_index, clear_index), (Some(commit), Some(clear)) if commit < clear)
+}
+
 #[test]
 fn f6_commits_hiragana_immediately() {
     let mut engine = InputMethodEngine::new();
@@ -54,6 +66,28 @@ fn f8_commits_half_width_katakana_immediately() {
     assert!(result.consumed);
     assert_eq!(committed_text(&result), Some("ｶﾞｯｺｳ"));
     assert!(matches!(engine.state(), InputState::Empty));
+}
+
+#[test]
+fn single_character_f6_f7_f8_commit_before_clearing_live_preedit() {
+    let cases = [(Keysym::F6, "あ"), (Keysym::F7, "ア"), (Keysym::F8, "ｱ")];
+
+    for (key, expected) in cases {
+        let mut engine = make_live_conversion_engine();
+        engine.process_key(&press('a'));
+        engine.live.text = "亜".to_string();
+
+        let result = engine.process_key(&press_key(key));
+
+        assert!(result.consumed);
+        assert_eq!(committed_text(&result), Some(expected));
+        assert!(
+            commit_precedes_preedit_clear(&result),
+            "{key:?} must commit before clearing the marked preedit: {:?}",
+            result.actions
+        );
+        assert!(matches!(engine.state(), InputState::Empty));
+    }
 }
 
 #[test]

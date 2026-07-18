@@ -500,8 +500,8 @@ impl InputMethodEngine {
         }
 
         EngineResult::consumed()
-            .with_action(EngineAction::UpdatePreedit(Preedit::new()))
             .with_action(EngineAction::Commit(text))
+            .with_action(EngineAction::UpdatePreedit(Preedit::new()))
             .with_action(EngineAction::HideCandidates)
             .with_action(EngineAction::HideAuxText)
     }
