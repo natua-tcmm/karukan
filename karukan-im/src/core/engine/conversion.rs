@@ -923,38 +923,45 @@ impl InputMethodEngine {
 
     /// Move the active segment's right boundary. Expanding steals the first
     /// character from the next segment; shrinking gives its last character to
-    /// the next segment. Empty segments are never created.
+    /// the next segment. Shrinking the final (or only) segment creates a new
+    /// trailing segment. Empty segments are never created.
     fn resize_conversion_segment(&mut self, expand: bool) -> EngineResult {
         let proposal = {
             let InputState::Conversion { session } = &self.state else {
                 return EngineResult::not_consumed();
             };
             let index = session.active_segment;
-            if index + 1 >= session.segments.len() {
-                return EngineResult::consumed();
-            }
             let left = &session.segments[index];
-            let right = &session.segments[index + 1];
-            let boundary = if expand {
+            let next = session.segments.get(index + 1);
+            let (boundary, right_end, insert_right) = if expand {
+                let Some(right) = next else {
+                    return EngineResult::consumed();
+                };
                 if right.reading_range.len() <= 1 {
                     return EngineResult::consumed();
                 }
-                left.reading_range.end + 1
+                (left.reading_range.end + 1, right.reading_range.end, false)
             } else {
                 if left.reading_range.len() <= 1 {
                     return EngineResult::consumed();
                 }
-                left.reading_range.end - 1
+                (
+                    left.reading_range.end - 1,
+                    next.map(|right| right.reading_range.end)
+                        .unwrap_or(left.reading_range.end),
+                    next.is_none(),
+                )
             };
             (
                 index,
                 left.reading_range.start..boundary,
-                boundary..right.reading_range.end,
+                boundary..right_end,
+                insert_right,
                 session.reading.chars().collect::<Vec<_>>(),
             )
         };
 
-        let (index, left_range, right_range, chars) = proposal;
+        let (index, left_range, right_range, insert_right, chars) = proposal;
         let left_reading: String = chars[left_range.clone()].iter().collect();
         let right_reading: String = chars[right_range.clone()].iter().collect();
         let (left_outer_hint, right_outer_hint) = {
@@ -997,12 +1004,17 @@ impl InputMethodEngine {
                 candidates: left_candidates,
                 explicitly_modified: true,
             };
-            session.segments[index + 1] = crate::core::state::ConversionSegment {
+            let right_segment = crate::core::state::ConversionSegment {
                 reading_range: right_range,
                 reading: right_reading,
                 candidates: right_candidates,
                 explicitly_modified: true,
             };
+            if insert_right {
+                session.segments.insert(index + 1, right_segment);
+            } else {
+                session.segments[index + 1] = right_segment;
+            }
             debug_assert!(session.ranges_are_valid());
             session.rebuild_preedit();
             session.candidates().cloned().unwrap_or_default()

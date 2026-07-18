@@ -251,6 +251,73 @@ fn shift_arrows_resize_only_the_active_and_next_segments() {
 }
 
 #[test]
+fn shift_left_splits_a_single_conversion_segment() {
+    use crate::core::keycode::KeyModifiers;
+    use crate::core::state::ConversionSession;
+
+    let mut engine = InputMethodEngine::new();
+    engine.state = InputState::Conversion {
+        session: ConversionSession::single(
+            "じっちゅうはっく".into(),
+            CandidateList::from_strings(["十中八九"]),
+        ),
+    };
+
+    let shift_left = KeyEvent::new(Keysym::LEFT, KeyModifiers::new().with_shift(true), true);
+    let result = engine.process_key(&shift_left);
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("conversion state expected");
+    };
+
+    assert!(result.consumed);
+    assert_eq!(session.segments.len(), 2);
+    assert_eq!(session.segments[0].reading, "じっちゅうはっ");
+    assert_eq!(session.segments[0].reading_range, 0..7);
+    assert_eq!(session.segments[1].reading, "く");
+    assert_eq!(session.segments[1].reading_range, 7..8);
+    assert!(session.ranges_are_valid());
+}
+
+#[test]
+fn shift_left_splits_the_final_conversion_segment() {
+    use crate::core::keycode::KeyModifiers;
+    use crate::core::state::{ConversionSegment, ConversionSession};
+
+    let segments = vec![
+        ConversionSegment {
+            reading_range: 0..3,
+            reading: "きょう".into(),
+            candidates: CandidateList::from_strings(["今日"]),
+            explicitly_modified: false,
+        },
+        ConversionSegment {
+            reading_range: 3..5,
+            reading: "いく".into(),
+            candidates: CandidateList::from_strings(["行く"]),
+            explicitly_modified: false,
+        },
+    ];
+    let mut session = ConversionSession::segmented("きょういく".into(), segments);
+    session.active_segment = 1;
+    session.rebuild_preedit();
+    let mut engine = InputMethodEngine::new();
+    engine.state = InputState::Conversion { session };
+
+    let shift_left = KeyEvent::new(Keysym::LEFT, KeyModifiers::new().with_shift(true), true);
+    engine.process_key(&shift_left);
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("conversion state expected");
+    };
+
+    assert_eq!(session.segments.len(), 3);
+    assert_eq!(session.segments[1].reading, "い");
+    assert_eq!(session.segments[1].reading_range, 3..4);
+    assert_eq!(session.segments[2].reading, "く");
+    assert_eq!(session.segments[2].reading_range, 4..5);
+    assert!(session.ranges_are_valid());
+}
+
+#[test]
 fn explicitly_selected_segment_is_learned_with_right_context() {
     use crate::core::state::{ConversionSegment, ConversionSession};
 

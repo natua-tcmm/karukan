@@ -81,6 +81,16 @@ final class KeyCodeMapTests: XCTestCase {
         }
     }
 
+    func testShiftArrowKeysPreserveModifier() {
+        for (keyCode, keysym) in [(123, 0xff51), (124, 0xff53)] {
+            let event = KeyCodeMap.translate(
+                keyCode: UInt16(keyCode), characters: nil,
+                charactersIgnoringModifiers: nil, flags: [.shift])
+            XCTAssertEqual(event?.keysym, UInt32(keysym))
+            XCTAssertEqual(event?.modifiers.shift, true)
+        }
+    }
+
     func testControlModifier() {
         let event = KeyCodeMap.translate(
             keyCode: 0, characters: "\u{0c}", charactersIgnoringModifiers: "l",
