@@ -192,6 +192,9 @@ pub struct InputMethodEngine {
     chunks: Vec<ComposingChunk>,
     /// Monotonic identity of the current composing snapshot.
     live_revision: u64,
+    /// Results from an earlier canceled/completed interaction must not be
+    /// applied, even when their reading happens to prefix-match a new session.
+    live_cancel_revision: u64,
     /// Dictionaries (system, user)
     dicts: Dictionaries,
     /// Learning cache (user conversion history)
@@ -234,6 +237,7 @@ impl InputMethodEngine {
             composing_candidates_model_ready: false,
             chunks: Vec::new(),
             live_revision: 0,
+            live_cancel_revision: 0,
             dicts: Dictionaries::default(),
             learning: None,
             segment_learning: None,
@@ -291,13 +295,13 @@ impl InputMethodEngine {
     /// the session. fcitx5 may send reset events between activate
     /// and the first keyEvent, which would wipe the context.
     pub fn reset(&mut self) {
-        self.live_revision = self.live_revision.wrapping_add(1);
+        self.invalidate_live_results();
         self.state = InputState::Empty;
         self.converters.romaji.reset();
         self.input_mode = InputMode::Hiragana;
         self.pre_emoji_mode = None;
         self.input_buf.clear();
-        self.live.text.clear();
+        self.live.clear();
         self.composing_candidates = None;
         self.composing_candidate_selected = false;
         self.composing_candidates_model_ready = false;
@@ -320,6 +324,7 @@ impl InputMethodEngine {
     /// Returns None if display is not empty (caller should continue normally).
     fn try_reset_if_empty(&mut self) -> Option<EngineResult> {
         if self.build_input_display().is_empty() {
+            self.invalidate_live_results();
             self.state = InputState::Empty;
             self.input_buf.clear();
             // Erasing the whole buffer ends the composition: drop the live
@@ -327,7 +332,7 @@ impl InputMethodEngine {
             // next composing session (build_composing_preedit would otherwise
             // render a stale live.text, and the chunk cache would be diffed
             // against a buffer it no longer matches).
-            self.live.text.clear();
+            self.live.clear();
             self.chunks.clear();
             // Emoji mode is per-session and bound to the typed `:` —
             // if the user erased back to an empty buffer, the session
@@ -382,6 +387,11 @@ impl InputMethodEngine {
         self.composing_candidates = None;
         self.composing_candidate_selected = false;
         self.composing_candidates_model_ready = false;
+    }
+
+    pub(super) fn invalidate_live_results(&mut self) {
+        self.live_revision = self.live_revision.wrapping_add(1);
+        self.live_cancel_revision = self.live_revision;
     }
 
     /// Convert hiragana in input_buf to katakana permanently.
@@ -559,7 +569,7 @@ impl InputMethodEngine {
 
     /// Commit any pending input and return the text
     pub fn commit(&mut self) -> String {
-        self.live_revision = self.live_revision.wrapping_add(1);
+        self.invalidate_live_results();
         match &self.state {
             InputState::Empty => String::new(),
             InputState::Composing { .. } => {
@@ -575,7 +585,7 @@ impl InputMethodEngine {
                 self.record_learning(&reading, &text);
                 self.converters.romaji.reset();
                 self.input_buf.clear();
-                self.live.text.clear();
+                self.live.clear();
                 self.clear_composing_candidates();
                 self.state = InputState::Empty;
                 self.surrounding_context = None;

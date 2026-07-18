@@ -6,11 +6,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use karukan_engine::{KanaKanjiConverter, ModelCandidate};
-use tracing::debug;
-
 use super::ComposingChunk;
 use super::chunk::{ChunkPlan, assemble_chunk_candidates, group_chunks, is_japanese};
+use karukan_engine::{KanaKanjiConverter, ModelCandidate};
 
 #[derive(Debug, Clone)]
 pub(super) struct LiveInferenceRequest {
@@ -198,11 +196,10 @@ fn worker_loop(
             }
             WorkerJob::Live(request) => {
                 let result = convert_live(&converter, request);
-                if !is_superseded(&shared, result.revision) {
-                    let _ = result_tx.send(result);
-                } else {
-                    debug!("discarding superseded live inference result");
-                }
+                // A newer input may already be pending. The UI can still apply
+                // this result to the matching reading prefix while the user
+                // continues typing, so do not discard it here.
+                let _ = result_tx.send(result);
             }
         }
     }
@@ -211,14 +208,6 @@ fn worker_loop(
 enum WorkerJob {
     Blocking(BlockingJob),
     Live(LiveInferenceRequest),
-}
-
-fn is_superseded(shared: &Shared, revision: u64) -> bool {
-    let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state
-        .pending_live
-        .as_ref()
-        .is_some_and(|request| request.revision > revision)
 }
 
 fn convert_live(

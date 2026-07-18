@@ -16,7 +16,7 @@ max_context_length = 10
 # 各チャンクの左コンテキストは直前までのチャンクの変換結果になる。
 composing_chunk_len = 30
 # ライブ推論の開始間隔（ミリ秒）。待機中の要求は常に最新入力で上書きする。
-live_inference_interval_ms = 500
+live_inference_interval_ms = 200
 # ライブ変換とSpace変換の両方で使うモデルID（省略時はregistry default）
 model = "jinen-v1-small-q5"
 # 推論スレッド数（0 = 全コア使用）

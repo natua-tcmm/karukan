@@ -213,6 +213,7 @@ impl InputMethodEngine {
     /// `skip_learning` remains available for internal/tests that need to inspect
     /// the learning-free branch; the normal key path keeps learning included.
     pub(super) fn start_conversion(&mut self, skip_learning: bool) -> EngineResult {
+        self.invalidate_live_results();
         let composing_reading = self.input_buf.text.clone();
         let composing_candidates = self.composing_candidates.clone();
         let composing_candidates_model_ready = self.composing_candidates_model_ready;
@@ -238,53 +239,50 @@ impl InputMethodEngine {
         // was already visible during live conversion into Conversion state.
         // Re-running whole/hybrid inference here made candidates 2 and 3
         // differ before and after Space even though candidate 1 was pinned.
-        let visible_live_list = !prev_suggest_text.is_empty()
-            && composing_candidates
-                .as_ref()
-                .and_then(CandidateList::selected_text)
-                == Some(prev_suggest_text.as_str());
-        let mut candidate_list = if composing_reading == reading
-            && (composing_candidates_model_ready || visible_live_list)
-        {
-            composing_candidates.filter(|candidates| {
-                !candidates.is_empty()
-                    && (prev_suggest_text.is_empty()
-                        || candidates.selected_text() == Some(prev_suggest_text.as_str()))
-            })
-        } else {
-            None
-        }
-        .unwrap_or_else(|| {
-            // A pending romaji suffix may be flushed by Space, changing the
-            // reading after the composing candidates were built. Only that
-            // stale-list case regenerates explicit candidates.
-            let mut candidates =
-                self.build_conversion_candidates(&reading, WHOLE_CANDIDATE_LIMIT, skip_learning);
-
-            // Candidate 1 must be exactly what live conversion was displaying.
-            // Preserve source metadata when fresh inference emitted the same text.
-            if !prev_suggest_text.is_empty() {
-                let candidate = candidates
-                    .iter()
-                    .position(|candidate| candidate.text == prev_suggest_text)
-                    .map(|index| candidates.remove(index))
-                    .unwrap_or_else(|| {
-                        ConversionCandidate::new(&prev_suggest_text, CandidateSource::Model)
-                    });
-                candidates.insert(0, candidate);
+        let mut candidate_list =
+            if composing_reading == reading && composing_candidates_model_ready {
+                composing_candidates.filter(|candidates| {
+                    !candidates.is_empty()
+                        && (prev_suggest_text.is_empty()
+                            || candidates.selected_text() == Some(prev_suggest_text.as_str()))
+                })
+            } else {
+                None
             }
-            candidates.truncate(WHOLE_CANDIDATE_LIMIT);
+            .unwrap_or_else(|| {
+                // A pending romaji suffix may be flushed by Space, changing the
+                // reading after the composing candidates were built. Only that
+                // stale-list case regenerates explicit candidates.
+                let mut candidates = self.build_conversion_candidates(
+                    &reading,
+                    WHOLE_CANDIDATE_LIMIT,
+                    skip_learning,
+                );
 
-            // Map ConversionCandidate → public Candidate. The two annotation
-            // slots are kept disjoint so descriptions never duplicate between the
-            // aux text and the candidate's right-side comment.
-            CandidateList::new(
-                candidates
-                    .into_iter()
-                    .map(|candidate| candidate.into_ui_candidate(&reading))
-                    .collect(),
-            )
-        });
+                // Candidate 1 must be exactly what live conversion was displaying.
+                // Preserve source metadata when fresh inference emitted the same text.
+                if !prev_suggest_text.is_empty() {
+                    let candidate = candidates
+                        .iter()
+                        .position(|candidate| candidate.text == prev_suggest_text)
+                        .map(|index| candidates.remove(index))
+                        .unwrap_or_else(|| {
+                            ConversionCandidate::new(&prev_suggest_text, CandidateSource::Model)
+                        });
+                    candidates.insert(0, candidate);
+                }
+                candidates.truncate(WHOLE_CANDIDATE_LIMIT);
+
+                // Map ConversionCandidate → public Candidate. The two annotation
+                // slots are kept disjoint so descriptions never duplicate between the
+                // aux text and the candidate's right-side comment.
+                CandidateList::new(
+                    candidates
+                        .into_iter()
+                        .map(|candidate| candidate.into_ui_candidate(&reading))
+                        .collect(),
+                )
+            });
 
         if candidate_list.is_empty() {
             // No candidates, stay in hiragana mode
@@ -308,6 +306,7 @@ impl InputMethodEngine {
     /// Exhaust the composing-time whole-reading candidates and enter segmented
     /// correction directly.
     pub(super) fn start_segmented_conversion_from_composing(&mut self) -> EngineResult {
+        self.invalidate_live_results();
         self.flush_romaji_to_composed();
         let reading = self.input_buf.text.clone();
         if reading.is_empty() {
@@ -319,7 +318,7 @@ impl InputMethodEngine {
             .unwrap_or_else(|| CandidateList::from_strings_with_reading([&reading], &reading));
 
         self.converters.romaji.reset();
-        self.live.text.clear();
+        self.live.clear();
         self.clear_composing_candidates();
         self.input_buf.cursor_pos = 0;
 

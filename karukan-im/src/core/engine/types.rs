@@ -113,7 +113,7 @@ impl Default for EngineConfig {
             display_context_len: 10,
             max_api_context_len: 10,
             composing_chunk_len: 30,
-            live_inference_interval_ms: 500,
+            live_inference_interval_ms: 200,
             live_conversion: false,
         }
     }
@@ -178,6 +178,10 @@ pub(in crate::core) struct LiveConversion {
     pub enabled: bool,
     /// Converted text (non-empty when live conversion produced a result)
     pub text: String,
+    /// Reading prefix covered by the most recently applied inference result.
+    pub applied_reading: String,
+    /// Converted surface corresponding exactly to `applied_reading`.
+    pub applied_text: String,
 }
 
 impl LiveConversion {
@@ -185,7 +189,34 @@ impl LiveConversion {
         Self {
             enabled,
             text: String::new(),
+            applied_reading: String::new(),
+            applied_text: String::new(),
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.applied_reading.clear();
+        self.applied_text.clear();
+    }
+
+    pub fn set_applied_prefix(&mut self, reading: String, text: String) {
+        self.applied_reading = reading;
+        self.applied_text = text;
+    }
+
+    /// Rebuild the visible surface by appending the as-yet unconverted suffix.
+    pub fn rebuild_for_reading(&mut self, reading: &str) -> bool {
+        let Some(suffix) = reading.strip_prefix(&self.applied_reading) else {
+            self.clear();
+            return false;
+        };
+        if self.applied_reading.is_empty() {
+            self.text.clear();
+            return false;
+        }
+        self.text = format!("{}{}", self.applied_text, suffix);
+        true
     }
 }
 

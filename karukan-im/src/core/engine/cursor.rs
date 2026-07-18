@@ -52,7 +52,8 @@ impl InputMethodEngine {
             self.flush_romaji_to_composed();
             self.converters.romaji.reset();
         }
-        self.live.text.clear();
+        self.invalidate_live_results();
+        self.live.clear();
         self.input_buf.cursor_pos = new_pos;
         self.log_chunk_state("cursor");
         let preedit = self.set_composing_state();
@@ -67,7 +68,8 @@ impl InputMethodEngine {
         // If romaji buffer is not empty, backspace from buffer (not from composed text)
         if !self.converters.romaji.buffer().is_empty() {
             self.converters.romaji.backspace();
-            self.live.text.clear();
+            self.invalidate_live_results();
+            self.live.clear();
             self.clear_composing_candidates();
             self.chunks.clear();
             if let Some(result) = self.try_reset_if_empty() {
@@ -94,7 +96,8 @@ impl InputMethodEngine {
         }
 
         if restored_romaji {
-            self.live.text.clear();
+            self.invalidate_live_results();
+            self.live.clear();
             self.clear_composing_candidates();
             self.chunks.clear();
             let preedit = self.set_composing_state();

@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(settings.conversion.num_candidates, 9);
         assert!(settings.conversion.use_context);
         assert_eq!(settings.conversion.max_context_length, 10);
-        assert_eq!(settings.conversion.live_inference_interval_ms, 500);
+        assert_eq!(settings.conversion.live_inference_interval_ms, 200);
     }
 
     #[test]

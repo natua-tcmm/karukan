@@ -201,6 +201,7 @@ fn space_does_not_regenerate_mixed_long_candidates() {
     engine.composing_candidates = Some(CandidateList::from_strings_with_reading(
         candidates, reading,
     ));
+    engine.composing_candidates_model_ready = true;
     engine.state = InputState::Composing {
         preedit: Preedit::with_text(candidates[0]),
         romaji_buffer: String::new(),
@@ -211,6 +212,65 @@ fn space_does_not_regenerate_mixed_long_candidates() {
     let after = engine.state().candidates().unwrap();
     assert_eq!(candidate_texts(after), candidates);
     assert_eq!(after.selected_text(), Some(candidates[1]));
+}
+
+#[test]
+fn background_result_replaces_only_its_reading_prefix() {
+    let mut engine = make_live_conversion_engine();
+    let current = "ほんらいのようと";
+    let completed = "ほんらいのよ";
+    engine.input_buf.text = current.to_string();
+    engine.input_buf.cursor_pos = current.chars().count();
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text(current),
+        romaji_buffer: String::new(),
+    };
+
+    let result = engine.apply_background_candidates(
+        completed.to_string(),
+        current.to_string(),
+        vec!["本来のよ".to_string(), "本来の世".to_string()],
+    );
+
+    assert_eq!(engine.live.applied_reading, completed);
+    assert_eq!(engine.live.applied_text, "本来のよ");
+    assert_eq!(engine.live.text, "本来のようと");
+    assert_eq!(engine.preedit().map(Preedit::text), Some("本来のようと"));
+    assert_eq!(
+        candidate_texts(engine.composing_candidates.as_ref().unwrap()),
+        ["本来のようと", "本来の世うと"]
+    );
+    assert!(!engine.composing_candidates_model_ready);
+    assert!(result.actions.iter().any(|action| {
+        matches!(
+            action,
+            EngineAction::UpdatePreedit(preedit) if preedit.text() == "本来のようと"
+        )
+    }));
+}
+
+#[test]
+fn converted_prefix_stays_visible_while_input_suffix_grows() {
+    let mut engine = make_live_conversion_engine();
+    engine
+        .live
+        .set_applied_prefix("ほんらいのよ".to_string(), "本来のよ".to_string());
+    engine.input_buf.text = "ほんらいのようと".to_string();
+    engine.input_buf.cursor_pos = engine.input_buf.text.chars().count();
+
+    let first = engine.refresh_without_model();
+    assert_eq!(engine.live.text, "本来のようと");
+    assert!(first.actions.iter().any(|action| {
+        matches!(
+            action,
+            EngineAction::UpdatePreedit(preedit) if preedit.text() == "本来のようと"
+        )
+    }));
+
+    engine.input_buf.text.push_str("いがい");
+    engine.input_buf.cursor_pos = engine.input_buf.text.chars().count();
+    engine.refresh_without_model();
+    assert_eq!(engine.live.text, "本来のようといがい");
 }
 
 #[test]

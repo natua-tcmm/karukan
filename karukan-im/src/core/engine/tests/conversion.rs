@@ -367,6 +367,7 @@ fn long_live_surface_enters_segmented_mode_without_changing_text() {
         [&surface],
         &reading,
     ));
+    engine.composing_candidates_model_ready = true;
     engine.state = InputState::Composing {
         preedit: Preedit::with_text(&surface),
         romaji_buffer: String::new(),

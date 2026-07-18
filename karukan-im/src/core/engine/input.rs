@@ -80,10 +80,8 @@ impl InputMethodEngine {
                 || karukan_engine::contains_kana(&self.input_buf.text));
         if convert && self.converters.kanji.is_some() {
             self.submit_live_inference();
-            // A conversion of an older reading must never hide newly typed
-            // characters. Show the cheap/raw state until the matching worker
-            // result arrives.
-            self.live.text.clear();
+            // Keep the last converted prefix visible and append newly typed
+            // reading after it until the next snapshot result arrives.
             return self.refresh_without_model();
         }
         let candidates = if convert {
@@ -103,7 +101,7 @@ impl InputMethodEngine {
             if self.live.enabled && should_prioritize_single_hiragana(self.input_mode, &reading) {
                 self.live.text = reading.clone();
             } else {
-                self.live.text.clear();
+                self.live.clear();
             }
             let preedit = self.set_composing_state();
             let mut all_candidates = self.lookup_learning_candidates(&reading);
@@ -165,7 +163,7 @@ impl InputMethodEngine {
         }
 
         // Normal auto-suggest: show hiragana preedit + learning/model/dict candidates
-        self.live.text.clear();
+        self.live.clear();
         let preedit = self.set_composing_state();
         // Learning candidates first (highest priority)
         let mut all_candidates = self.lookup_learning_candidates(&reading);
@@ -189,17 +187,31 @@ impl InputMethodEngine {
     }
 
     /// Rebuild composing UI without waiting for model inference.
-    fn refresh_without_model(&mut self) -> EngineResult {
+    pub(super) fn refresh_without_model(&mut self) -> EngineResult {
         let reading = self.input_buf.text.clone();
-        if self.live.enabled && should_prioritize_single_hiragana(self.input_mode, &reading) {
+        let preserved_prefix = self.live.enabled
+            && self.input_mode != InputMode::Katakana
+            && self.live.rebuild_for_reading(&reading);
+        if !preserved_prefix
+            && self.live.enabled
+            && should_prioritize_single_hiragana(self.input_mode, &reading)
+        {
             self.live.text = reading.clone();
-        } else {
-            self.live.text.clear();
+        } else if !preserved_prefix {
+            self.live.clear();
         }
         let preedit = self.set_composing_state();
         let mut candidates = self.lookup_learning_candidates(&reading);
         append_candidates_dedup(&mut candidates, self.lookup_dict_candidates(&reading));
         append_candidates_dedup(&mut candidates, self.lookup_rewriter_variants(&reading));
+        if !self.live.text.is_empty() {
+            let live_text = self.live.text.clone();
+            promote_composing_candidate(
+                &mut candidates,
+                &live_text,
+                Candidate::with_reading(&live_text, &reading),
+            );
+        }
         prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut candidates);
         limit_whole_candidates(&mut candidates);
         if candidates.is_empty() {
@@ -233,17 +245,19 @@ impl InputMethodEngine {
         }
     }
 
-    /// Apply a completed background inference if it still describes the
-    /// current composing snapshot.
+    /// Apply a completed background inference to the reading prefix it covers.
+    ///
+    /// The user may have typed a suffix since the request was submitted. That
+    /// suffix remains raw and is appended after the converted prefix.
     pub fn poll_live_conversion(&mut self) -> Option<EngineResult> {
         let result = self
             .converters
             .kanji
             .as_ref()
             .and_then(|worker| worker.poll_latest())?;
-        if result.revision != self.live_revision
-            || result.reading != self.input_buf.text
+        if result.revision <= self.live_cancel_revision
             || !matches!(self.state, InputState::Composing { .. })
+            || !self.input_buf.text.starts_with(&result.reading)
         {
             return None;
         }
@@ -251,53 +265,77 @@ impl InputMethodEngine {
         self.metrics.conversion_ms = result.conversion_ms;
         self.metrics.model_name = self.model_name();
         self.chunks = result.chunks;
-        let Some(candidates) = result.candidates else {
-            return Some(self.refresh_without_model());
-        };
-        Some(self.apply_background_candidates(result.reading, candidates))
+        let top_surface: String = self
+            .chunks
+            .iter()
+            .map(|chunk| chunk.converted.as_str())
+            .collect();
+        let candidates = result
+            .candidates
+            .unwrap_or_else(|| vec![top_surface.clone()]);
+        Some(self.apply_background_candidates(
+            result.reading,
+            self.input_buf.text.clone(),
+            candidates,
+        ))
     }
 
-    fn apply_background_candidates(
+    pub(super) fn apply_background_candidates(
         &mut self,
-        reading: String,
-        candidates: Vec<String>,
+        result_reading: String,
+        current_reading: String,
+        prefix_candidates: Vec<String>,
     ) -> EngineResult {
-        if self.live.enabled && self.input_mode != InputMode::Katakana {
-            self.live.text = if should_prioritize_single_hiragana(self.input_mode, &reading) {
-                reading.clone()
-            } else {
-                candidates[0].clone()
-            };
+        let suffix = current_reading
+            .strip_prefix(&result_reading)
+            .unwrap_or_default();
+        let applied_prefix = if should_prioritize_single_hiragana(self.input_mode, &result_reading)
+        {
+            result_reading.clone()
         } else {
-            self.live.text.clear();
+            prefix_candidates[0].clone()
+        };
+        if self.live.enabled && self.input_mode != InputMode::Katakana {
+            self.live
+                .set_applied_prefix(result_reading.clone(), applied_prefix);
+            self.live.rebuild_for_reading(&current_reading);
+        } else {
+            self.live.clear();
         }
         let preedit = self.set_composing_state();
-        let mut all_candidates = self.lookup_learning_candidates(&reading);
+        let mut all_candidates = self.lookup_learning_candidates(&current_reading);
+        let whole_candidates = prefix_candidates
+            .into_iter()
+            .map(|prefix| Candidate::with_reading(format!("{prefix}{suffix}"), &current_reading))
+            .collect();
+        append_candidates_dedup(&mut all_candidates, whole_candidates);
         append_candidates_dedup(
             &mut all_candidates,
-            candidates
-                .into_iter()
-                .map(|text| Candidate::with_reading(text, &reading))
-                .collect(),
+            self.lookup_dict_candidates(&current_reading),
         );
-        append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
         if !self.live.text.is_empty() {
             let live_text = self.live.text.clone();
             promote_composing_candidate(
                 &mut all_candidates,
                 &live_text,
-                Candidate::with_reading(&live_text, &reading),
+                Candidate::with_reading(&live_text, &current_reading),
             );
         }
-        prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
+        prioritize_single_hiragana_candidate(
+            self.input_mode,
+            &current_reading,
+            &mut all_candidates,
+        );
         limit_whole_candidates(&mut all_candidates);
         let candidates = self.set_composing_candidates(CandidateList::new(all_candidates));
-        self.mark_composing_candidates_model_ready();
+        if result_reading == current_reading {
+            self.mark_composing_candidates_model_ready();
+        }
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
             .with_action(EngineAction::ShowCandidates(candidates))
             .with_action(EngineAction::UpdateAuxText(
-                self.format_aux_suggest(&reading),
+                self.format_aux_suggest(&current_reading),
             ))
     }
 
@@ -487,7 +525,8 @@ impl InputMethodEngine {
                         }
                         self.input_mode = InputMode::Alphabet;
                         self.flush_romaji_to_composed();
-                        self.live.text.clear();
+                        self.invalidate_live_results();
+                        self.live.clear();
                     }
                     let ch = if self.input_mode == InputMode::Alphabet && is_shift_alpha {
                         ch.to_ascii_uppercase()
@@ -504,8 +543,8 @@ impl InputMethodEngine {
     /// Leave live/candidate selection while keeping the raw reading as an
     /// ordinary unconfirmed hiragana preedit.
     fn cancel_live_composing(&mut self) -> EngineResult {
-        self.live_revision = self.live_revision.wrapping_add(1);
-        self.live.text.clear();
+        self.invalidate_live_results();
+        self.live.clear();
         self.clear_composing_candidates();
         self.chunks.clear();
         let preedit = self.set_composing_state();
@@ -523,9 +562,10 @@ impl InputMethodEngine {
     /// the candidate list so the user sees emoji suggestions appear
     /// the moment they press `:`.
     pub(super) fn start_emoji_mode(&mut self) -> EngineResult {
+        self.invalidate_live_results();
         self.converters.romaji.reset();
         self.input_buf.clear();
-        self.live.text.clear();
+        self.live.clear();
         // Remember where the user was so commit/cancel/erase-to-empty
         // can drop them back into the same mode (e.g. Katakana stays
         // Katakana). Guard against clobbering on re-entry just in case
@@ -601,7 +641,7 @@ impl InputMethodEngine {
         if candidates.is_empty() {
             return EngineResult::not_consumed();
         }
-        self.live_revision = self.live_revision.wrapping_add(1);
+        self.invalidate_live_results();
         if self.composing_candidate_selected {
             if candidates.cursor() + 1 >= candidates.len() {
                 return self.start_segmented_conversion_from_composing();
@@ -620,7 +660,7 @@ impl InputMethodEngine {
         if candidates.is_empty() {
             return EngineResult::not_consumed();
         }
-        self.live_revision = self.live_revision.wrapping_add(1);
+        self.invalidate_live_results();
         if self.composing_candidate_selected {
             candidates.move_prev();
         } else {
@@ -671,9 +711,10 @@ impl InputMethodEngine {
             self.record_learning(&reading, &text);
         }
 
+        self.invalidate_live_results();
         self.converters.romaji.reset();
         self.input_buf.clear();
-        self.live.text.clear();
+        self.live.clear();
         self.clear_composing_candidates();
         self.chunks.clear();
         self.state = InputState::Empty;
@@ -692,6 +733,7 @@ impl InputMethodEngine {
     }
 
     fn commit_composing_as(&mut self, form: ComposingCommitForm) -> EngineResult {
+        self.invalidate_live_results();
         self.flush_romaji_to_composed();
         let reading = self.input_buf.text.clone();
         let text = match form {
@@ -704,7 +746,7 @@ impl InputMethodEngine {
 
         self.converters.romaji.reset();
         self.input_buf.clear();
-        self.live.text.clear();
+        self.live.clear();
         self.clear_composing_candidates();
         self.chunks.clear();
         self.state = InputState::Empty;
@@ -727,6 +769,7 @@ impl InputMethodEngine {
             return result;
         }
 
+        self.invalidate_live_results();
         // Flush any pending romaji into composed_hiragana
         self.flush_romaji_to_composed();
 
@@ -751,7 +794,7 @@ impl InputMethodEngine {
         if text.is_empty() {
             self.state = InputState::Empty;
             self.input_buf.clear();
-            self.live.text.clear();
+            self.live.clear();
             self.clear_composing_candidates();
             self.chunks.clear();
             return EngineResult::consumed()
@@ -769,7 +812,7 @@ impl InputMethodEngine {
 
         self.converters.romaji.reset();
         self.input_buf.clear();
-        self.live.text.clear();
+        self.live.clear();
         self.clear_composing_candidates();
         self.chunks.clear();
         self.state = InputState::Empty;
