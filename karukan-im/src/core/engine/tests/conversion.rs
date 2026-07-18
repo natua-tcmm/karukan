@@ -149,22 +149,53 @@ fn best_lattice_path_initializes_conversion_segments() {
 }
 
 #[test]
+fn initial_segmentation_preserves_the_selected_whole_surface() {
+    use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
+    use karukan_engine::{DictionaryCategory, DictionarySource};
+
+    let entry = |reading: &str, surface: &str| {
+        NormalizedDictionaryEntry::new(
+            reading,
+            surface,
+            0.0,
+            DictionarySource::Mozc,
+            DictionaryCategory::General,
+            None,
+        )
+        .unwrap()
+    };
+    let dictionary =
+        Dictionary::build_from_normalized([entry("とうきょう", "東京"), entry("えき", "駅")])
+            .unwrap();
+    let mut engine = InputMethodEngine::new();
+    engine.dicts.system = Some(dictionary);
+    let session = engine.build_initial_conversion_session(
+        "とうきょうえき",
+        CandidateList::from_strings_with_reading(["東京都駅"], "とうきょうえき"),
+    );
+
+    assert_eq!(session.segments.len(), 2);
+    assert_eq!(session.selected_text(), "東京都駅");
+    assert_eq!(session.preedit().text(), "東京都駅");
+    assert_eq!(session.segments[0].selected_text(), "東京都");
+    assert_eq!(session.segments[1].selected_text(), "駅");
+}
+
+#[test]
 fn left_and_right_move_the_active_conversion_segment() {
     use crate::core::state::{ConversionSegment, ConversionSession};
 
     let segments = vec![
-        ConversionSegment {
-            reading_range: 0..3,
-            reading: "きょう".into(),
-            candidates: CandidateList::from_strings_with_reading(["今日", "京"], "きょう"),
-            explicitly_modified: false,
-        },
-        ConversionSegment {
-            reading_range: 3..5,
-            reading: "いく".into(),
-            candidates: CandidateList::from_strings_with_reading(["行く", "往く"], "いく"),
-            explicitly_modified: false,
-        },
+        ConversionSegment::new(
+            0..3,
+            "きょう".into(),
+            CandidateList::from_strings_with_reading(["今日", "京"], "きょう"),
+        ),
+        ConversionSegment::new(
+            3..5,
+            "いく".into(),
+            CandidateList::from_strings_with_reading(["行く", "往く"], "いく"),
+        ),
     ];
     let mut engine = InputMethodEngine::new();
     engine.state = InputState::Conversion {
@@ -204,24 +235,17 @@ fn shift_arrows_resize_only_the_active_and_next_segments() {
     use crate::core::state::{ConversionSegment, ConversionSession};
 
     let segments = vec![
-        ConversionSegment {
-            reading_range: 0..8,
-            reading: "じっちゅうはっく".into(),
-            candidates: CandidateList::from_strings(["十中八九"]),
-            explicitly_modified: false,
-        },
-        ConversionSegment {
-            reading_range: 8..11,
-            reading: "あたる".into(),
-            candidates: CandidateList::from_strings(["当たる"]),
-            explicitly_modified: false,
-        },
-        ConversionSegment {
-            reading_range: 11..13,
-            reading: "かも".into(),
-            candidates: CandidateList::from_strings(["かも"]),
-            explicitly_modified: false,
-        },
+        ConversionSegment::new(
+            0..8,
+            "じっちゅうはっく".into(),
+            CandidateList::from_strings(["十中八九"]),
+        ),
+        ConversionSegment::new(
+            8..11,
+            "あたる".into(),
+            CandidateList::from_strings(["当たる"]),
+        ),
+        ConversionSegment::new(11..13, "かも".into(), CandidateList::from_strings(["かも"])),
     ];
     let mut engine = InputMethodEngine::new();
     engine.state = InputState::Conversion {
@@ -284,18 +308,8 @@ fn shift_left_splits_the_final_conversion_segment() {
     use crate::core::state::{ConversionSegment, ConversionSession};
 
     let segments = vec![
-        ConversionSegment {
-            reading_range: 0..3,
-            reading: "きょう".into(),
-            candidates: CandidateList::from_strings(["今日"]),
-            explicitly_modified: false,
-        },
-        ConversionSegment {
-            reading_range: 3..5,
-            reading: "いく".into(),
-            candidates: CandidateList::from_strings(["行く"]),
-            explicitly_modified: false,
-        },
+        ConversionSegment::new(0..3, "きょう".into(), CandidateList::from_strings(["今日"])),
+        ConversionSegment::new(3..5, "いく".into(), CandidateList::from_strings(["行く"])),
     ];
     let mut session = ConversionSession::segmented("きょういく".into(), segments);
     session.active_segment = 1;
@@ -322,18 +336,12 @@ fn explicitly_selected_segment_is_learned_with_right_context() {
     use crate::core::state::{ConversionSegment, ConversionSession};
 
     let segments = vec![
-        ConversionSegment {
-            reading_range: 0..2,
-            reading: "あと".into(),
-            candidates: CandidateList::from_strings(["後", "あと"]),
-            explicitly_modified: false,
-        },
-        ConversionSegment {
-            reading_range: 2..3,
-            reading: "、".into(),
-            candidates: CandidateList::from_strings(["、"]),
-            explicitly_modified: false,
-        },
+        ConversionSegment::new(
+            0..2,
+            "あと".into(),
+            CandidateList::from_strings(["後", "あと"]),
+        ),
+        ConversionSegment::new(2..3, "、".into(), CandidateList::from_strings(["、"])),
     ];
     let mut engine = InputMethodEngine::new();
     engine.segment_learning = Some(karukan_engine::SegmentLearningCache::new(100));
@@ -357,12 +365,11 @@ fn explicitly_selected_segment_is_learned_with_right_context() {
 fn accepting_initial_segment_does_not_enter_segment_learning() {
     use crate::core::state::{ConversionSegment, ConversionSession};
 
-    let segments = vec![ConversionSegment {
-        reading_range: 0..2,
-        reading: "あと".into(),
-        candidates: CandidateList::from_strings(["後", "あと"]),
-        explicitly_modified: false,
-    }];
+    let segments = vec![ConversionSegment::new(
+        0..2,
+        "あと".into(),
+        CandidateList::from_strings(["後", "あと"]),
+    )];
     let mut engine = InputMethodEngine::new();
     engine.segment_learning = Some(karukan_engine::SegmentLearningCache::new(100));
     engine.state = InputState::Conversion {

@@ -14,13 +14,35 @@ pub struct ConversionSegment {
     pub reading_range: Range<usize>,
     pub reading: String,
     pub candidates: CandidateList,
+    /// Surface currently shown for this segment. Kept separately from the
+    /// candidate cursor so rebuilding alternatives never changes the preedit.
+    selected_surface: String,
     /// Whether the user explicitly changed this segment during conversion.
     pub explicitly_modified: bool,
 }
 
 impl ConversionSegment {
+    pub fn new(reading_range: Range<usize>, reading: String, candidates: CandidateList) -> Self {
+        let selected_surface = candidates.selected_text().unwrap_or(&reading).to_string();
+        Self {
+            reading_range,
+            reading,
+            candidates,
+            selected_surface,
+            explicitly_modified: false,
+        }
+    }
+
     pub fn selected_text(&self) -> &str {
-        self.candidates.selected_text().unwrap_or(&self.reading)
+        &self.selected_surface
+    }
+
+    pub fn sync_selected_surface(&mut self) {
+        self.selected_surface = self
+            .candidates
+            .selected_text()
+            .unwrap_or(&self.reading)
+            .to_string();
     }
 }
 
@@ -44,12 +66,7 @@ impl ConversionSession {
         let selected_len = selected.chars().count();
         Self {
             reading: reading.clone(),
-            segments: vec![ConversionSegment {
-                reading_range: 0..reading_len,
-                reading,
-                candidates,
-                explicitly_modified: false,
-            }],
+            segments: vec![ConversionSegment::new(0..reading_len, reading, candidates)],
             active_segment: 0,
             preedit: Preedit::from_segments(
                 vec![PreeditSegment::highlighted(selected)],

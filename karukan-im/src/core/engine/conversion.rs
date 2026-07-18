@@ -15,6 +15,40 @@ use crate::core::engine::long_conversion::{
 /// Maximum number of learning candidates to show
 const MAX_LEARNING_CANDIDATES: usize = 3;
 
+/// Split a surface into the same number of non-empty pieces as `weights`.
+/// Exact dictionary surfaces are preferred by callers; this proportional
+/// fallback keeps the concatenated preedit byte-for-byte identical when the
+/// selected whole-reading candidate follows different boundaries.
+fn partition_surface(surface: &str, weights: &[usize]) -> Option<Vec<String>> {
+    let chars: Vec<char> = surface.chars().collect();
+    if weights.is_empty() || chars.len() < weights.len() {
+        return None;
+    }
+    let total_weight: usize = weights.iter().sum();
+    if total_weight == 0 {
+        return None;
+    }
+
+    let mut result = Vec::with_capacity(weights.len());
+    let mut start = 0;
+    let mut cumulative_weight = 0;
+    for (index, weight) in weights.iter().enumerate() {
+        cumulative_weight += weight;
+        let remaining_segments = weights.len() - index - 1;
+        let end = if remaining_segments == 0 {
+            chars.len()
+        } else {
+            let proportional = (cumulative_weight * chars.len() + total_weight / 2) / total_weight;
+            proportional
+                .max(start + 1)
+                .min(chars.len() - remaining_segments)
+        };
+        result.push(chars[start..end].iter().collect());
+        start = end;
+    }
+    Some(result)
+}
+
 /// Mozc-style width/script annotation for a pure-kana candidate, or `None`
 /// if the text mixes scripts or contains kanji/punctuation. Used to label
 /// `あ` / `ア` / `ｱ` candidates in the conversion list.
@@ -204,6 +238,7 @@ impl InputMethodEngine {
             from_dictionary: bool,
         }
 
+        let preserved_candidate = full_candidates.selected().cloned();
         let Some(path) = self.dictionary_lattice_paths(reading, 1).into_iter().next() else {
             return self.single_segment_session_with_learning(reading, full_candidates);
         };
@@ -237,6 +272,32 @@ impl InputMethodEngine {
             return self.single_segment_session_with_learning(reading, full_candidates);
         }
 
+        let path_surface: String = initial
+            .iter()
+            .map(|segment| segment.surface.as_str())
+            .collect();
+        let preserved_surfaces = preserved_candidate.as_ref().and_then(|candidate| {
+            if candidate.text == path_surface {
+                Some(
+                    initial
+                        .iter()
+                        .map(|segment| segment.surface.clone())
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                partition_surface(
+                    &candidate.text,
+                    &initial
+                        .iter()
+                        .map(|segment| segment.surface.chars().count())
+                        .collect::<Vec<_>>(),
+                )
+            }
+        });
+        if preserved_candidate.is_some() && preserved_surfaces.is_none() {
+            return self.single_segment_session_with_learning(reading, full_candidates);
+        }
+
         let mut segments = Vec::new();
         for (index, initial_segment) in initial.iter().enumerate() {
             let left_hint = index
@@ -259,38 +320,45 @@ impl InputMethodEngine {
                 .map(|candidate| candidate.into_ui_candidate(&initial_segment.reading))
                 .collect(),
             );
-            let (mut candidates, has_segment_learning) = self.prepend_segment_learning(
+            let (mut candidates, _) = self.prepend_segment_learning(
                 &initial_segment.reading,
                 base_candidates,
                 left_hint.as_deref(),
                 right_hint.as_deref(),
             );
+            let preferred_surface = preserved_surfaces
+                .as_ref()
+                .and_then(|surfaces| surfaces.get(index))
+                .unwrap_or(&initial_segment.surface);
             let preferred_index = candidates
                 .candidates()
                 .iter()
-                .position(|candidate| candidate.text == initial_segment.surface);
-            if has_segment_learning {
-                // The context-aware correction is intentionally first.
-            } else if let Some(index) = preferred_index {
+                .position(|candidate| candidate.text == *preferred_surface);
+            if let Some(index) = preferred_index {
                 candidates.select(index);
             } else {
                 let mut values = vec![Candidate {
-                    text: initial_segment.surface.clone(),
+                    text: preferred_surface.clone(),
                     reading: Some(initial_segment.reading.clone()),
-                    source_label: initial_segment
-                        .from_dictionary
-                        .then(|| CandidateSource::Dictionary.label().to_string()),
+                    source_label: if preserved_surfaces.is_some() {
+                        preserved_candidate
+                            .as_ref()
+                            .and_then(|candidate| candidate.source_label.clone())
+                    } else {
+                        initial_segment
+                            .from_dictionary
+                            .then(|| CandidateSource::Dictionary.label().to_string())
+                    },
                     description: None,
                 }];
                 values.extend(candidates.candidates().iter().cloned());
                 candidates = CandidateList::new(values);
             }
-            segments.push(crate::core::state::ConversionSegment {
-                reading_range: initial_segment.start..initial_segment.end,
-                reading: initial_segment.reading.clone(),
+            segments.push(crate::core::state::ConversionSegment::new(
+                initial_segment.start..initial_segment.end,
+                initial_segment.reading.clone(),
                 candidates,
-                explicitly_modified: false,
-            });
+            ));
         }
         crate::core::state::ConversionSession::segmented(reading.to_string(), segments)
     }
@@ -998,18 +1066,18 @@ impl InputMethodEngine {
             let InputState::Conversion { session } = &mut self.state else {
                 return EngineResult::not_consumed();
             };
-            session.segments[index] = crate::core::state::ConversionSegment {
-                reading_range: left_range,
-                reading: left_reading,
-                candidates: left_candidates,
-                explicitly_modified: true,
-            };
-            let right_segment = crate::core::state::ConversionSegment {
-                reading_range: right_range,
-                reading: right_reading,
-                candidates: right_candidates,
-                explicitly_modified: true,
-            };
+            session.segments[index] = crate::core::state::ConversionSegment::new(
+                left_range,
+                left_reading,
+                left_candidates,
+            );
+            session.segments[index].explicitly_modified = true;
+            let mut right_segment = crate::core::state::ConversionSegment::new(
+                right_range,
+                right_reading,
+                right_candidates,
+            );
+            right_segment.explicitly_modified = true;
             if insert_right {
                 session.segments.insert(index + 1, right_segment);
             } else {
@@ -1203,6 +1271,7 @@ impl InputMethodEngine {
                 return EngineResult::not_consumed();
             };
             if op(&mut segment.candidates) {
+                segment.sync_selected_surface();
                 segment.explicitly_modified = true;
             }
             segment.candidates.clone()
@@ -1254,6 +1323,7 @@ impl InputMethodEngine {
             if segment.candidates.select_on_page(digit).is_none() {
                 return EngineResult::consumed();
             }
+            segment.sync_selected_surface();
             segment.explicitly_modified = true;
             segment.candidates.clone()
         };
