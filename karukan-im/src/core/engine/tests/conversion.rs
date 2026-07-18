@@ -149,7 +149,7 @@ fn best_lattice_path_initializes_conversion_segments() {
 }
 
 #[test]
-fn initial_segmentation_preserves_the_selected_whole_surface() {
+fn unalignable_whole_surface_remains_a_single_segment() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};
 
@@ -174,11 +174,52 @@ fn initial_segmentation_preserves_the_selected_whole_surface() {
         CandidateList::from_strings_with_reading(["東京都駅"], "とうきょうえき"),
     );
 
-    assert_eq!(session.segments.len(), 2);
+    assert_eq!(session.segments.len(), 1);
     assert_eq!(session.selected_text(), "東京都駅");
     assert_eq!(session.preedit().text(), "東京都駅");
-    assert_eq!(session.segments[0].selected_text(), "東京都");
-    assert_eq!(session.segments[1].selected_text(), "駅");
+    assert_eq!(session.segments[0].reading, "とうきょうえき");
+}
+
+#[test]
+fn initial_segmentation_aligns_each_surface_with_its_reading() {
+    use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
+    use karukan_engine::{DictionaryCategory, DictionarySource};
+
+    let entry = |reading: &str, surface: &str, score: f32| {
+        NormalizedDictionaryEntry::new(
+            reading,
+            surface,
+            score,
+            DictionarySource::Mozc,
+            DictionaryCategory::General,
+            None,
+        )
+        .unwrap()
+    };
+    let dictionary = Dictionary::build_from_normalized([
+        entry("となり", "隣り", 0.0),
+        entry("となり", "隣", 1.0),
+        entry("の", "野", 0.0),
+        entry("の", "の", 1.0),
+        entry("きゃくは", "客は", 0.0),
+    ])
+    .unwrap();
+    let mut engine = InputMethodEngine::new();
+    engine.dicts.system = Some(dictionary);
+    let session = engine.build_initial_conversion_session(
+        "となりのきゃくは",
+        CandidateList::from_strings_with_reading(["隣の客は"], "となりのきゃくは"),
+    );
+
+    assert_eq!(session.segments.len(), 3);
+    assert_eq!(session.selected_text(), "隣の客は");
+    assert_eq!(session.segments[0].reading, "となり");
+    assert_eq!(session.segments[0].selected_text(), "隣");
+    assert_eq!(session.segments[1].reading, "の");
+    assert_eq!(session.segments[1].selected_text(), "の");
+    assert_eq!(session.segments[1].candidates.selected_text(), Some("の"));
+    assert_eq!(session.segments[2].reading, "きゃくは");
+    assert_eq!(session.segments[2].selected_text(), "客は");
 }
 
 #[test]
@@ -299,8 +340,6 @@ fn shift_left_splits_a_single_conversion_segment() {
     assert_eq!(session.segments[0].reading_range, 0..7);
     assert_eq!(session.segments[1].reading, "く");
     assert_eq!(session.segments[1].reading_range, 7..8);
-    assert_eq!(session.selected_text(), "十中八九");
-    assert_eq!(session.preedit().text(), "十中八九");
     assert!(
         session
             .segments
@@ -312,6 +351,12 @@ fn shift_left_splits_a_single_conversion_segment() {
             .segments
             .iter()
             .all(|segment| !segment.explicitly_modified)
+    );
+    assert!(
+        session
+            .segments
+            .iter()
+            .all(|segment| { segment.candidates.selected_text() == Some(segment.selected_text()) })
     );
     assert!(session.ranges_are_valid());
 }
@@ -339,9 +384,66 @@ fn shift_right_merges_a_one_character_trailing_segment() {
 
     assert_eq!(session.segments.len(), 1);
     assert_eq!(session.segments[0].reading_range, 0..8);
-    assert_eq!(session.selected_text(), "十中八九");
-    assert_eq!(session.preedit().text(), "十中八九");
+    assert_eq!(session.selected_text(), "じっちゅうはっく");
+    assert_eq!(session.preedit().text(), "じっちゅうはっく");
+    assert_eq!(
+        session.segments[0].candidates.selected_text(),
+        Some(session.segments[0].selected_text())
+    );
     assert!(session.ranges_are_valid());
+}
+
+#[test]
+fn boundary_resize_preserves_surface_only_with_an_exact_alignment() {
+    use crate::core::keycode::KeyModifiers;
+    use crate::core::state::{ConversionSegment, ConversionSession};
+    use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
+    use karukan_engine::{DictionaryCategory, DictionarySource};
+
+    let entry = |reading: &str, surface: &str| {
+        NormalizedDictionaryEntry::new(
+            reading,
+            surface,
+            0.0,
+            DictionarySource::Mozc,
+            DictionaryCategory::General,
+            None,
+        )
+        .unwrap()
+    };
+    let dictionary =
+        Dictionary::build_from_normalized([entry("となり", "隣"), entry("きゃく", "客")]).unwrap();
+    let segments = vec![
+        ConversionSegment::new(
+            0..4,
+            "となりの".into(),
+            CandidateList::from_strings(["隣の"]),
+        ),
+        ConversionSegment::new(4..7, "きゃく".into(), CandidateList::from_strings(["客"])),
+    ];
+    let mut engine = InputMethodEngine::new();
+    engine.dicts.system = Some(dictionary);
+    engine.state = InputState::Conversion {
+        session: ConversionSession::segmented("となりのきゃく".into(), segments),
+    };
+
+    let shift_left = KeyEvent::new(Keysym::LEFT, KeyModifiers::new().with_shift(true), true);
+    engine.process_key(&shift_left);
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("conversion state expected");
+    };
+
+    assert_eq!(session.selected_text(), "隣の客");
+    assert_eq!(session.segments[0].reading, "となり");
+    assert_eq!(session.segments[0].selected_text(), "隣");
+    assert_eq!(session.segments[1].reading, "のきゃく");
+    assert_eq!(session.segments[1].selected_text(), "の客");
+    assert!(
+        session
+            .segments
+            .iter()
+            .all(|segment| { segment.candidates.selected_text() == Some(segment.selected_text()) })
+    );
 }
 
 #[test]
@@ -367,7 +469,10 @@ fn candidate_navigation_rebuilds_only_a_dirty_active_segment() {
     assert!(!session.segments[0].candidates_dirty);
     assert!(session.segments[0].candidates.len() > 1);
     assert!(session.segments[1].candidates_dirty);
-    assert_ne!(session.segments[0].selected_text(), "十中八");
+    assert_eq!(
+        session.segments[0].candidates.selected_text(),
+        Some(session.segments[0].selected_text())
+    );
 }
 
 #[test]

@@ -15,38 +15,59 @@ use crate::core::engine::long_conversion::{
 /// Maximum number of learning candidates to show
 const MAX_LEARNING_CANDIDATES: usize = 3;
 
-/// Split a surface into the same number of non-empty pieces as `weights`.
-/// Exact dictionary surfaces are preferred by callers; this proportional
-/// fallback keeps the concatenated preedit byte-for-byte identical when the
-/// selected whole-reading candidate follows different boundaries.
-fn partition_surface(surface: &str, weights: &[usize]) -> Option<Vec<String>> {
-    let chars: Vec<char> = surface.chars().collect();
-    if weights.is_empty() || chars.len() < weights.len() {
-        return None;
-    }
-    let total_weight: usize = weights.iter().sum();
-    if total_weight == 0 {
-        return None;
+/// Find one candidate per reading segment whose concatenation exactly matches
+/// the whole-reading surface. A failed alignment must never be replaced by a
+/// character-count heuristic: doing so can attach an unrelated surface such
+/// as `客` to the reading `の`.
+fn align_surface_to_candidates(
+    surface: &str,
+    candidate_lists: &[CandidateList],
+) -> Option<Vec<usize>> {
+    fn visit(
+        surface: &str,
+        candidate_lists: &[CandidateList],
+        segment_index: usize,
+        byte_offset: usize,
+        failed: &mut HashSet<(usize, usize)>,
+        path: &mut Vec<usize>,
+    ) -> bool {
+        if segment_index == candidate_lists.len() {
+            return byte_offset == surface.len();
+        }
+        if !failed.insert((segment_index, byte_offset)) {
+            return false;
+        }
+
+        let Some(remaining) = surface.get(byte_offset..) else {
+            return false;
+        };
+        for (candidate_index, candidate) in candidate_lists[segment_index]
+            .candidates()
+            .iter()
+            .enumerate()
+        {
+            if candidate.text.is_empty() || !remaining.starts_with(&candidate.text) {
+                continue;
+            }
+            path.push(candidate_index);
+            if visit(
+                surface,
+                candidate_lists,
+                segment_index + 1,
+                byte_offset + candidate.text.len(),
+                failed,
+                path,
+            ) {
+                return true;
+            }
+            path.pop();
+        }
+        false
     }
 
-    let mut result = Vec::with_capacity(weights.len());
-    let mut start = 0;
-    let mut cumulative_weight = 0;
-    for (index, weight) in weights.iter().enumerate() {
-        cumulative_weight += weight;
-        let remaining_segments = weights.len() - index - 1;
-        let end = if remaining_segments == 0 {
-            chars.len()
-        } else {
-            let proportional = (cumulative_weight * chars.len() + total_weight / 2) / total_weight;
-            proportional
-                .max(start + 1)
-                .min(chars.len() - remaining_segments)
-        };
-        result.push(chars[start..end].iter().collect());
-        start = end;
-    }
-    Some(result)
+    let mut failed = HashSet::new();
+    let mut path = Vec::with_capacity(candidate_lists.len());
+    visit(surface, candidate_lists, 0, 0, &mut failed, &mut path).then_some(path)
 }
 
 /// Mozc-style width/script annotation for a pure-kana candidate, or `None`
@@ -272,33 +293,8 @@ impl InputMethodEngine {
             return self.single_segment_session_with_learning(reading, full_candidates);
         }
 
-        let path_surface: String = initial
-            .iter()
-            .map(|segment| segment.surface.as_str())
-            .collect();
-        let preserved_surfaces = preserved_candidate.as_ref().and_then(|candidate| {
-            if candidate.text == path_surface {
-                Some(
-                    initial
-                        .iter()
-                        .map(|segment| segment.surface.clone())
-                        .collect::<Vec<_>>(),
-                )
-            } else {
-                partition_surface(
-                    &candidate.text,
-                    &initial
-                        .iter()
-                        .map(|segment| segment.surface.chars().count())
-                        .collect::<Vec<_>>(),
-                )
-            }
-        });
-        if preserved_candidate.is_some() && preserved_surfaces.is_none() {
-            return self.single_segment_session_with_learning(reading, full_candidates);
-        }
-
-        let mut segments = Vec::new();
+        let mut prepared_candidates = Vec::with_capacity(initial.len());
+        let mut has_segment_learning = Vec::with_capacity(initial.len());
         for (index, initial_segment) in initial.iter().enumerate() {
             let left_hint = index
                 .checked_sub(1)
@@ -320,39 +316,59 @@ impl InputMethodEngine {
                 .map(|candidate| candidate.into_ui_candidate(&initial_segment.reading))
                 .collect(),
             );
-            let (mut candidates, _) = self.prepend_segment_learning(
+            let (candidates, has_learning) = self.prepend_segment_learning(
                 &initial_segment.reading,
                 base_candidates,
                 left_hint.as_deref(),
                 right_hint.as_deref(),
             );
-            let preferred_surface = preserved_surfaces
-                .as_ref()
-                .and_then(|surfaces| surfaces.get(index))
-                .unwrap_or(&initial_segment.surface);
-            let preferred_index = candidates
+
+            let candidates = if candidates
                 .candidates()
                 .iter()
-                .position(|candidate| candidate.text == *preferred_surface);
-            if let Some(index) = preferred_index {
-                candidates.select(index);
+                .any(|candidate| candidate.text == initial_segment.surface)
+            {
+                candidates
             } else {
-                let mut values = vec![Candidate {
-                    text: preferred_surface.clone(),
+                let mut values = candidates.candidates().to_vec();
+                values.push(Candidate {
+                    text: initial_segment.surface.clone(),
                     reading: Some(initial_segment.reading.clone()),
-                    source_label: if preserved_surfaces.is_some() {
-                        preserved_candidate
-                            .as_ref()
-                            .and_then(|candidate| candidate.source_label.clone())
-                    } else {
-                        initial_segment
-                            .from_dictionary
-                            .then(|| CandidateSource::Dictionary.label().to_string())
-                    },
+                    source_label: initial_segment
+                        .from_dictionary
+                        .then(|| CandidateSource::Dictionary.label().to_string()),
                     description: None,
-                }];
-                values.extend(candidates.candidates().iter().cloned());
-                candidates = CandidateList::new(values);
+                });
+                CandidateList::new(values)
+            };
+            prepared_candidates.push(candidates);
+            has_segment_learning.push(has_learning);
+        }
+
+        let aligned_indices = preserved_candidate.as_ref().and_then(|candidate| {
+            align_surface_to_candidates(&candidate.text, &prepared_candidates)
+        });
+        if preserved_candidate.is_some() && aligned_indices.is_none() {
+            return self.single_segment_session_with_learning(reading, full_candidates);
+        }
+
+        let mut segments = Vec::with_capacity(initial.len());
+        for (index, (initial_segment, mut candidates)) in
+            initial.iter().zip(prepared_candidates).enumerate()
+        {
+            if let Some(candidate_index) = aligned_indices
+                .as_ref()
+                .and_then(|indices| indices.get(index))
+                .copied()
+            {
+                candidates.select(candidate_index);
+            } else if !has_segment_learning[index]
+                && let Some(candidate_index) = candidates
+                    .candidates()
+                    .iter()
+                    .position(|candidate| candidate.text == initial_segment.surface)
+            {
+                candidates.select(candidate_index);
             }
             segments.push(crate::core::state::ConversionSegment::new(
                 initial_segment.start..initial_segment.end,
@@ -989,6 +1005,39 @@ impl InputMethodEngine {
             .0
     }
 
+    /// Build boundary-adjustment candidates without invoking the neural model.
+    /// Exact dictionary and lattice surfaces are enough to preserve the current
+    /// display when it can be aligned safely; the reading itself is the
+    /// correctness-preserving fallback.
+    fn boundary_candidate_list(
+        &self,
+        reading: &str,
+        left_hint: Option<&str>,
+        right_hint: Option<&str>,
+    ) -> CandidateList {
+        let mut seen = HashSet::new();
+        let mut values = Vec::new();
+        for candidate in self
+            .search_dictionaries(reading, MAX_SEGMENT_CANDIDATES)
+            .into_iter()
+            .chain(self.dictionary_lattice_candidates(reading, MAX_SEGMENT_CANDIDATES))
+        {
+            if seen.insert(candidate.text.clone()) {
+                values.push(candidate.into_ui_candidate(reading));
+            }
+        }
+        if seen.insert(reading.to_string()) {
+            values.push(Candidate::with_reading(reading, reading));
+        }
+        for candidate in self.lookup_rewriter_variants(reading) {
+            if seen.insert(candidate.text.clone()) {
+                values.push(candidate);
+            }
+        }
+        self.prepend_segment_learning(reading, CandidateList::new(values), left_hint, right_hint)
+            .0
+    }
+
     fn refresh_active_segment_candidates_if_dirty(&mut self) {
         let Some((reading, preserved_surface, left_hint, right_hint)) = (|| {
             let InputState::Conversion { session } = &self.state else {
@@ -1102,12 +1151,43 @@ impl InputMethodEngine {
         let right_reading = right_range
             .as_ref()
             .map(|range| chars[range.clone()].iter().collect::<String>());
-        let surfaces = right_range
-            .as_ref()
-            .and_then(|range| {
-                partition_surface(&preserved_surface, &[left_range.len(), range.clone().len()])
-            })
-            .unwrap_or_else(|| vec![preserved_surface.clone()]);
+        let (left_outer_hint, right_outer_hint) = {
+            let InputState::Conversion { session } = &self.state else {
+                return EngineResult::not_consumed();
+            };
+            let left = index
+                .checked_sub(1)
+                .and_then(|previous| session.segments[previous].selected_text().chars().last())
+                .map(|ch| ch.to_string())
+                .or_else(|| self.editor_left_hint());
+            let right = session
+                .segments
+                .get(index + 2)
+                .and_then(|next| next.selected_text().chars().next())
+                .map(|ch| ch.to_string())
+                .or_else(|| self.editor_right_hint());
+            (left, right)
+        };
+
+        let mut candidate_lists =
+            vec![self.boundary_candidate_list(&left_reading, left_outer_hint.as_deref(), None)];
+        if let Some(reading) = right_reading.as_deref() {
+            candidate_lists.push(self.boundary_candidate_list(
+                reading,
+                None,
+                right_outer_hint.as_deref(),
+            ));
+        }
+        if let Some(aligned_indices) =
+            align_surface_to_candidates(&preserved_surface, &candidate_lists)
+        {
+            for (candidates, selected_index) in candidate_lists.iter_mut().zip(aligned_indices) {
+                candidates.select(selected_index);
+            }
+        }
+        let mut candidate_lists = candidate_lists.into_iter();
+        let left_candidates = candidate_lists.next().unwrap_or_default();
+        let right_candidates = candidate_lists.next();
 
         let candidates = {
             let InputState::Conversion { session } = &mut self.state else {
@@ -1115,20 +1195,18 @@ impl InputMethodEngine {
             };
             let mut left_segment = crate::core::state::ConversionSegment::new(
                 left_range.clone(),
-                left_reading.clone(),
-                CandidateList::from_strings_with_reading(
-                    [surfaces[0].clone()],
-                    left_reading.clone(),
-                ),
+                left_reading,
+                left_candidates,
             );
             left_segment.candidates_dirty = true;
             session.segments[index] = left_segment;
-            if let (Some(right_range), Some(right_reading)) = (right_range, right_reading) {
-                let right_surface = surfaces.get(1).cloned().unwrap_or_default();
+            if let (Some(right_range), Some(right_reading), Some(right_candidates)) =
+                (right_range, right_reading, right_candidates)
+            {
                 let mut right_segment = crate::core::state::ConversionSegment::new(
                     right_range,
-                    right_reading.clone(),
-                    CandidateList::from_strings_with_reading([right_surface], right_reading),
+                    right_reading,
+                    right_candidates,
                 );
                 right_segment.candidates_dirty = true;
                 if insert_right {
