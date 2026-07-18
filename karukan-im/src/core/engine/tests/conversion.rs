@@ -284,6 +284,103 @@ fn unalignable_whole_surface_remains_a_single_segment() {
 }
 
 #[test]
+fn ambiguous_middle_is_merged_while_exact_neighbors_stay_segmented() {
+    use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
+    use karukan_engine::{DictionaryCategory, DictionarySource};
+
+    let entry = |reading: &str, surface: &str| {
+        NormalizedDictionaryEntry::new(
+            reading,
+            surface,
+            0.0,
+            DictionarySource::Mozc,
+            DictionaryCategory::General,
+            None,
+        )
+        .unwrap()
+    };
+    let dictionary =
+        Dictionary::build_from_normalized([entry("とうきょう", "東京"), entry("えき", "駅")])
+            .unwrap();
+    let mut engine = InputMethodEngine::new();
+    engine.dicts.system = Some(dictionary);
+    let session = engine.build_initial_conversion_session(
+        "とうきょうなぞえき",
+        CandidateList::from_strings_with_reading(["東京ミステリー駅"], "とうきょうなぞえき"),
+    );
+
+    assert_eq!(session.segments.len(), 3);
+    assert_eq!(session.selected_text(), "東京ミステリー駅");
+    assert_eq!(session.segments[0].reading, "とうきょう");
+    assert_eq!(session.segments[0].selected_text(), "東京");
+    assert_eq!(session.segments[1].reading, "なぞ");
+    assert_eq!(session.segments[1].selected_text(), "ミステリー");
+    assert_eq!(session.segments[2].reading, "えき");
+    assert_eq!(session.segments[2].selected_text(), "駅");
+    assert!(
+        session
+            .segments
+            .iter()
+            .all(|segment| { segment.candidates.candidates()[0].text == segment.selected_text() })
+    );
+}
+
+#[test]
+fn long_live_surface_enters_segmented_mode_without_changing_text() {
+    use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
+    use karukan_engine::{DictionaryCategory, DictionarySource};
+
+    let entry = |reading: &str, surface: &str| {
+        NormalizedDictionaryEntry::new(
+            reading,
+            surface,
+            0.0,
+            DictionarySource::Mozc,
+            DictionaryCategory::General,
+            None,
+        )
+        .unwrap()
+    };
+    let dictionary =
+        Dictionary::build_from_normalized([entry("とうきょう", "東京"), entry("えき", "駅")])
+            .unwrap();
+    let reading = "とうきょうなぞえき".repeat(4);
+    let surface = "東京ミステリー駅".repeat(4);
+    assert!(reading.chars().count() > EngineConfig::default().composing_chunk_len);
+
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.system = Some(dictionary);
+    engine.input_buf.text = reading.clone();
+    engine.input_buf.cursor_pos = reading.chars().count();
+    engine.live.text = surface.clone();
+    engine.composing_candidates = Some(CandidateList::from_strings_with_reading(
+        [&surface],
+        &reading,
+    ));
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text(&surface),
+        romaji_buffer: String::new(),
+    };
+
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::SPACE));
+
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("segmented conversion expected");
+    };
+    assert!(!session.is_whole_candidate_phase());
+    assert!(session.segments.len() > 1);
+    assert_eq!(session.selected_text(), surface);
+    assert_eq!(session.preedit().text(), surface);
+    assert!(
+        session
+            .segments
+            .iter()
+            .all(|segment| { segment.candidates.candidates()[0].text == segment.selected_text() })
+    );
+}
+
+#[test]
 fn initial_segmentation_aligns_each_surface_with_its_reading() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};

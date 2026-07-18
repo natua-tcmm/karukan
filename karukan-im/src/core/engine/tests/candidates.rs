@@ -187,6 +187,33 @@ fn space_reuses_the_exact_live_candidate_list() {
 }
 
 #[test]
+fn space_does_not_regenerate_mixed_long_candidates() {
+    let reading = "ぶんかつhennkannいこうじにへんかんちゅうもじれつがへんか";
+    let candidates = [
+        "分割hennkann移行時に変換中文字列が変化",
+        "分割変換移行時に変換中文字列が変化",
+        "分割hennkann移行時の変換中文字列が変化",
+    ];
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = reading.to_string();
+    engine.input_buf.cursor_pos = reading.chars().count();
+    engine.live.text = candidates[0].to_string();
+    engine.composing_candidates = Some(CandidateList::from_strings_with_reading(
+        candidates, reading,
+    ));
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text(candidates[0]),
+        romaji_buffer: String::new(),
+    };
+
+    engine.process_key(&press_key(Keysym::SPACE));
+
+    let after = engine.state().candidates().unwrap();
+    assert_eq!(candidate_texts(after), candidates);
+    assert_eq!(after.selected_text(), Some(candidates[1]));
+}
+
+#[test]
 fn tab_selects_visible_composing_candidate_then_enter_commits_it() {
     let mut engine = InputMethodEngine::new();
 
