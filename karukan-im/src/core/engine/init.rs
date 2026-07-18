@@ -1,7 +1,6 @@
 //! Engine initialization (model loading, dictionary setup)
 
 use anyhow::{Context, Result};
-use std::time::Duration;
 use tracing::debug;
 
 use super::*;
@@ -73,10 +72,7 @@ impl InputMethodEngine {
                 model_name,
                 threads_label(n_threads)
             );
-            self.converters.kanji = Some(super::async_live::InferenceWorker::new(
-                converter,
-                Duration::from_millis(self.config.live_inference_interval_ms),
-            ));
+            self.converters.kanji = Some(super::async_live::InferenceWorker::new(converter));
         }
         Ok(())
     }

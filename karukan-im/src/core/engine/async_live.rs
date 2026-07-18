@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::ComposingChunk;
 use super::chunk::{ChunkPlan, assemble_chunk_candidates, group_chunks, is_japanese};
@@ -44,7 +44,6 @@ enum BlockingJob {
 struct WorkerState {
     pending_live: Option<LiveInferenceRequest>,
     blocking: VecDeque<BlockingJob>,
-    next_live_at: Option<Instant>,
     shutdown: bool,
 }
 
@@ -59,11 +58,10 @@ pub(in crate::core) struct InferenceWorker {
     results: Receiver<LiveInferenceResult>,
     thread: Option<JoinHandle<()>>,
     model_name: String,
-    interval: Duration,
 }
 
 impl InferenceWorker {
-    pub(super) fn new(converter: KanaKanjiConverter, interval: Duration) -> Self {
+    pub(super) fn new(converter: KanaKanjiConverter) -> Self {
         let model_name = converter.model_display_name().to_string();
         let shared = Arc::new(Shared {
             state: Mutex::new(WorkerState::default()),
@@ -73,14 +71,13 @@ impl InferenceWorker {
         let worker_shared = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name("karukan-inference".to_string())
-            .spawn(move || worker_loop(converter, interval, worker_shared, result_tx))
+            .spawn(move || worker_loop(converter, worker_shared, result_tx))
             .expect("failed to spawn inference worker");
         Self {
             shared,
             results,
             thread: Some(thread),
             model_name,
-            interval,
         }
     }
 
@@ -91,9 +88,6 @@ impl InferenceWorker {
     /// Replace the pending live request. Requests are intentionally not queued.
     pub(super) fn submit_live(&self, request: LiveInferenceRequest) {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        if state.pending_live.is_none() {
-            state.next_live_at = Some(Instant::now() + self.interval);
-        }
         state.pending_live = Some(request);
         self.shared.wake.notify_one();
     }
@@ -109,7 +103,6 @@ impl InferenceWorker {
         {
             let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
             state.pending_live = None;
-            state.next_live_at = None;
             state.blocking.push_back(BlockingJob::Convert {
                 reading: reading.to_string(),
                 context: context.to_string(),
@@ -146,11 +139,9 @@ impl Drop for InferenceWorker {
 
 fn worker_loop(
     converter: KanaKanjiConverter,
-    interval: Duration,
     shared: Arc<Shared>,
     result_tx: Sender<LiveInferenceResult>,
 ) {
-    let interval = interval.max(Duration::from_millis(1));
     loop {
         let job = {
             let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -161,23 +152,9 @@ fn worker_loop(
                 if let Some(job) = state.blocking.pop_front() {
                     break WorkerJob::Blocking(job);
                 }
-                if state.pending_live.is_some() {
-                    let due = state.next_live_at.unwrap_or_else(Instant::now);
-                    let now = Instant::now();
-                    if now >= due {
-                        let request = state.pending_live.take().expect("checked above");
-                        state.next_live_at = Some(now + interval);
-                        break WorkerJob::Live(request);
-                    }
-                    let wait = due.saturating_duration_since(now);
-                    let (new_state, _) = shared
-                        .wake
-                        .wait_timeout(state, wait)
-                        .unwrap_or_else(|e| e.into_inner());
-                    state = new_state;
-                    continue;
+                if let Some(request) = state.pending_live.take() {
+                    break WorkerJob::Live(request);
                 }
-                state.next_live_at = None;
                 state = shared.wake.wait(state).unwrap_or_else(|e| e.into_inner());
             }
         };

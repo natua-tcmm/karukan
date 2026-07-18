@@ -79,8 +79,6 @@ pub struct EngineConfig {
     /// background live-conversion work stays bounded for long input. See
     /// [`ComposingChunk`] and `chunked_auto_suggest`.
     pub composing_chunk_len: usize,
-    /// Minimum interval between background live-conversion starts.
-    pub live_inference_interval_ms: u64,
     /// Whether live conversion is enabled at engine startup
     pub live_conversion: bool,
 }
@@ -99,7 +97,6 @@ impl EngineConfig {
                 0
             },
             composing_chunk_len: settings.conversion.composing_chunk_len,
-            live_inference_interval_ms: settings.conversion.live_inference_interval_ms,
             live_conversion: settings.conversion.live_conversion,
         }
     }
@@ -113,7 +110,6 @@ impl Default for EngineConfig {
             display_context_len: 10,
             max_api_context_len: 10,
             composing_chunk_len: 30,
-            live_inference_interval_ms: 200,
             live_conversion: false,
         }
     }

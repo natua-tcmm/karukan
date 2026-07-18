@@ -40,8 +40,6 @@ pub struct ConversionSettings {
     /// bounded for long input; each chunk's left context is the converted text
     /// of the preceding chunks.
     pub composing_chunk_len: usize,
-    /// Minimum interval between background live-conversion starts.
-    pub live_inference_interval_ms: u64,
     /// Path to dictionary binary file (optional, defaults to data_dir/dict.bin)
     pub dict_path: Option<String>,
     /// Model variant id (optional, defaults to registry default)
@@ -203,7 +201,6 @@ mod tests {
         assert_eq!(settings.conversion.num_candidates, 9);
         assert!(settings.conversion.use_context);
         assert_eq!(settings.conversion.max_context_length, 10);
-        assert_eq!(settings.conversion.live_inference_interval_ms, 200);
     }
 
     #[test]
@@ -275,6 +272,7 @@ light_model = "jinen-v1-xsmall-q5"
 short_input_threshold = 5
 beam_width = 2
 max_latency_ms = 50
+live_inference_interval_ms = 200
 model = "jinen-v1-xsmall-q5"
 "#,
         )
@@ -293,6 +291,7 @@ model = "jinen-v1-xsmall-q5"
             "short_input_threshold",
             "beam_width",
             "max_latency_ms",
+            "live_inference_interval_ms",
         ] {
             assert!(!serialized.contains(key));
         }
