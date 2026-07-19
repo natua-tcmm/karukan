@@ -1,8 +1,10 @@
 use serde_json::{Value, json};
 
-use super::ImServer;
+use super::{ImServer, to_action};
 use crate::config::Settings;
+use crate::core::engine::EngineAction;
 use crate::core::keycode::Keysym;
+use crate::core::preedit::{AttributeType, Preedit, PreeditAttribute};
 
 // XKB keysyms for common keys (u32 aliases for the JSON payloads below)
 const XKB_KEY_K: u32 = Keysym::KEY_K.0;
@@ -39,6 +41,19 @@ fn actions_of<'a>(resp: &'a Value, ty: &str) -> Vec<&'a Value> {
         .iter()
         .filter(|a| a["type"] == ty)
         .collect()
+}
+
+#[test]
+fn test_dotted_preedit_attribute_serialization() {
+    let mut preedit = Preedit::with_text("かk");
+    preedit.set_attributes(vec![
+        PreeditAttribute::new(0, 1, AttributeType::Underline),
+        PreeditAttribute::new(1, 2, AttributeType::UnderlineDotted),
+    ]);
+
+    let action = serde_json::to_value(to_action(EngineAction::UpdatePreedit(preedit))).unwrap();
+    assert_eq!(action["attributes"][0]["style"], "underline");
+    assert_eq!(action["attributes"][1]["style"], "underline_dotted");
 }
 
 #[test]

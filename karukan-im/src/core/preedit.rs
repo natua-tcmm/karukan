@@ -8,6 +8,8 @@
 pub enum AttributeType {
     /// Normal underline for uncommitted preedit text
     Underline,
+    /// Dotted underline for text still waiting for live conversion
+    UnderlineDotted,
     /// Double underline for the currently selected segment
     UnderlineDouble,
     /// Highlight for text being converted

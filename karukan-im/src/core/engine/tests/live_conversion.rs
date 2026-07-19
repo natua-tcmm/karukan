@@ -171,7 +171,7 @@ fn test_live_conversion_cursor_move_clears() {
 
 #[test]
 fn test_live_conversion_build_preedit() {
-    // Test build_composing_preedit constructs correct display for live conversion
+    // A live surface without an applied result is still pending.
     let mut engine = make_live_conversion_engine();
 
     engine.live.text = "漢字".to_string();
@@ -179,6 +179,83 @@ fn test_live_conversion_build_preedit() {
     let preedit = engine.build_composing_preedit();
     assert_eq!(preedit.text(), "漢字");
     assert_eq!(preedit.caret(), 2); // 漢字 = 2 chars
+    assert_eq!(
+        preedit.attributes(),
+        [PreeditAttribute::new(0, 2, AttributeType::UnderlineDotted)]
+    );
+}
+
+#[test]
+fn live_conversion_preedit_marks_applied_prefix_and_pending_suffix() {
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = "ほんらいのようと".to_string();
+    engine.input_buf.cursor_pos = engine.input_buf.text.chars().count();
+    engine
+        .live
+        .set_applied_prefix("ほんらいのよ".to_string(), "本来のよ".to_string());
+    assert!(engine.live.rebuild_for_reading(&engine.input_buf.text));
+
+    let preedit = engine.build_composing_preedit();
+    assert_eq!(preedit.text(), "本来のようと");
+    assert_eq!(
+        preedit.attributes(),
+        [
+            PreeditAttribute::new(0, 4, AttributeType::Underline),
+            PreeditAttribute::new(4, 6, AttributeType::UnderlineDotted),
+        ]
+    );
+    assert_eq!(
+        engine.format_aux_suggest(&engine.input_buf.text),
+        "ほんらいのようと"
+    );
+}
+
+#[test]
+fn finished_live_conversion_uses_single_underline_and_checkmark() {
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = "ほんらいのよ".to_string();
+    engine.input_buf.cursor_pos = engine.input_buf.text.chars().count();
+    engine
+        .live
+        .set_applied_prefix("ほんらいのよ".to_string(), "本来のよ".to_string());
+    assert!(engine.live.rebuild_for_reading(&engine.input_buf.text));
+
+    let preedit = engine.build_composing_preedit();
+    assert_eq!(preedit.text(), "本来のよ");
+    assert_eq!(
+        preedit.attributes(),
+        [PreeditAttribute::new(0, 4, AttributeType::Underline)]
+    );
+    assert_eq!(
+        engine.format_aux_suggest(&engine.input_buf.text),
+        "\u{2705}\u{FE0F} ほんらいのよ"
+    );
+}
+
+#[test]
+fn pending_romaji_keeps_live_conversion_incomplete() {
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = "ほんらいのよ".to_string();
+    engine.input_buf.cursor_pos = engine.input_buf.text.chars().count();
+    engine
+        .live
+        .set_applied_prefix("ほんらいのよ".to_string(), "本来のよ".to_string());
+    assert!(engine.live.rebuild_for_reading(&engine.input_buf.text));
+    engine.converters.romaji.push('k');
+
+    let preedit = engine.build_composing_preedit();
+    assert_eq!(preedit.text(), "本来のよk");
+    assert_eq!(
+        preedit.attributes(),
+        [
+            PreeditAttribute::new(0, 4, AttributeType::Underline),
+            PreeditAttribute::new(4, 5, AttributeType::UnderlineDotted),
+        ]
+    );
+    assert_eq!(
+        engine.format_aux_suggest(&engine.input_buf.text),
+        "ほんらいのよk"
+    );
 }
 
 #[test]

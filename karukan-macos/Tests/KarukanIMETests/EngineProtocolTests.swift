@@ -1,3 +1,4 @@
+import Cocoa
 import XCTest
 
 @testable import KarukanIME
@@ -9,17 +10,29 @@ final class EngineProtocolTests: XCTestCase {
 
     func testDecodePreeditAction() throws {
         let json = """
-            {"consumed":true,"actions":[{"attributes":[{"end":1,"start":0,"style":"underline"}],"caret":1,"text":"か","type":"update_preedit"}],"conversion_ms":0,"process_key_ms":0}
+            {"consumed":true,"actions":[{"attributes":[{"end":1,"start":0,"style":"underline"},{"end":2,"start":1,"style":"underline_dotted"}],"caret":2,"text":"かk","type":"update_preedit"}],"conversion_ms":0,"process_key_ms":0}
             """
         let result = try decodeKeyResult(json)
         XCTAssertTrue(result.consumed)
         guard case .updatePreedit(let text, let caret, let attributes) = result.actions[0] else {
             return XCTFail("expected update_preedit")
         }
-        XCTAssertEqual(text, "か")
-        XCTAssertEqual(caret, 1)
-        XCTAssertEqual(attributes.count, 1)
+        XCTAssertEqual(text, "かk")
+        XCTAssertEqual(caret, 2)
+        XCTAssertEqual(attributes.count, 2)
         XCTAssertEqual(attributes[0].style, "underline")
+        XCTAssertEqual(attributes[1].style, "underline_dotted")
+    }
+
+    func testDottedPreeditStyleUsesSingleDottedUnderline() {
+        XCTAssertEqual(
+            underlineStyleRawValue(for: "underline_dotted"),
+            NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue
+        )
+        XCTAssertEqual(
+            underlineStyleRawValue(for: "underline"),
+            NSUnderlineStyle.single.rawValue
+        )
     }
 
     func testDecodeShowCandidates() throws {

@@ -56,7 +56,31 @@ impl InputMethodEngine {
         let len = display.chars().count();
         let mut preedit = Preedit::with_text(&display);
         preedit.set_caret(caret);
-        preedit.set_attributes(vec![PreeditAttribute::underline(0, len)]);
+        if self.live.enabled && matches!(self.input_mode, InputMode::Hiragana | InputMode::Alphabet)
+        {
+            let completed_len = if !self.live.text.is_empty()
+                && !self.live.applied_reading.is_empty()
+                && self.input_buf.text.starts_with(&self.live.applied_reading)
+            {
+                self.live.applied_text.chars().count().min(len)
+            } else {
+                0
+            };
+            let mut attributes = Vec::with_capacity(2);
+            if completed_len > 0 {
+                attributes.push(PreeditAttribute::underline(0, completed_len));
+            }
+            if completed_len < len {
+                attributes.push(PreeditAttribute::new(
+                    completed_len,
+                    len,
+                    AttributeType::UnderlineDotted,
+                ));
+            }
+            preedit.set_attributes(attributes);
+        } else {
+            preedit.set_attributes(vec![PreeditAttribute::underline(0, len)]);
+        }
         preedit
     }
 
@@ -65,7 +89,7 @@ impl InputMethodEngine {
         match self.input_mode {
             InputMode::Alphabet => "[A]",
             InputMode::Katakana => "[カ]",
-            InputMode::Hiragana => "[あ]",
+            InputMode::Hiragana => "",
             // ☺ (U+263A, Unicode 1.1 / 1993) — the oldest smiley-face
             // codepoint in Unicode; gives emoji mode an unambiguous
             // glyph in the aux text that's distinct from `[A]` so the
@@ -76,10 +100,30 @@ impl InputMethodEngine {
     }
 
     fn format_mode_and_reading(&self, indicator: &str, reading: &str) -> String {
-        if reading.is_empty() {
-            indicator.to_string()
+        match (indicator.is_empty(), reading.is_empty()) {
+            (true, true) => String::new(),
+            (true, false) => reading.to_string(),
+            (false, true) => indicator.to_string(),
+            (false, false) => format!("{} {}", indicator, reading),
+        }
+    }
+
+    /// Whether the current Hiragana reading, including any pending romaji,
+    /// is fully covered by the most recently applied live-conversion result.
+    fn live_conversion_finished(&self, reading: &str) -> bool {
+        self.input_mode == InputMode::Hiragana
+            && self.live.enabled
+            && !reading.is_empty()
+            && self.converters.romaji.buffer().is_empty()
+            && self.live.applied_reading == reading
+            && !self.live.applied_text.is_empty()
+    }
+
+    fn composing_indicator(&self, reading: &str) -> String {
+        if self.live_conversion_finished(reading) {
+            "\u{2705}\u{FE0F}".to_string()
         } else {
-            format!("{} {}", indicator, reading)
+            self.mode_indicator()
         }
     }
 
@@ -94,8 +138,8 @@ impl InputMethodEngine {
 
     /// Format aux text for composing input mode
     pub(super) fn format_aux_composing(&self) -> String {
-        let indicator = self.mode_indicator();
         let reading = self.reading_with_romaji_buffer(&self.input_buf.text);
+        let indicator = self.composing_indicator(&self.input_buf.text);
         self.format_mode_and_reading(&indicator, &reading)
     }
 
@@ -110,7 +154,7 @@ impl InputMethodEngine {
 
     /// Format aux text for auto-suggest mode
     pub(super) fn format_aux_suggest(&self, reading: &str) -> String {
-        let indicator = self.mode_indicator();
+        let indicator = self.composing_indicator(reading);
         let display_reading = self.reading_with_romaji_buffer(reading);
         self.format_mode_and_reading(&indicator, &display_reading)
     }

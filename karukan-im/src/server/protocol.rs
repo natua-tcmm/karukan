@@ -193,7 +193,7 @@ pub struct PreeditAttr {
     pub start: usize,
     /// End position in Unicode scalar values (exclusive).
     pub end: usize,
-    /// "underline" | "underline_double" | "highlight" | "reverse"
+    /// "underline" | "underline_dotted" | "underline_double" | "highlight" | "reverse"
     pub style: &'static str,
 }
 

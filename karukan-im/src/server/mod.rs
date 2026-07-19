@@ -200,6 +200,7 @@ fn to_action(action: EngineAction) -> Action {
                     end: a.end,
                     style: match a.attr_type {
                         AttributeType::Underline => "underline",
+                        AttributeType::UnderlineDotted => "underline_dotted",
                         AttributeType::UnderlineDouble => "underline_double",
                         AttributeType::Highlight => "highlight",
                         AttributeType::Reverse => "reverse",

@@ -323,7 +323,7 @@ fn test_aux_text_hides_chunk_lctx() {
         })
         .expect("aux text action");
 
-    assert_eq!(aux, "[あ] あいうえ");
+    assert_eq!(aux, "あいうえ");
     assert!(!aux.contains("lctx:"), "aux was: {aux}");
     assert!(!aux.contains("ctx:"), "aux was: {aux}");
 }

@@ -276,17 +276,8 @@ class KarukanInputController: IMKInputController {
         )
         for attr in attributes {
             guard let range = utf16Range(of: attr.start..<attr.end, in: text) else { continue }
-            let style: NSUnderlineStyle
-            switch attr.style {
-            // The focused/highlighted segment is drawn with a thick
-            // underline (the convention azooKey/mac-akaza use for marked
-            // text, since background colors are unreliable across apps).
-            case "underline_double", "highlight", "reverse":
-                style = .thick
-            default:
-                style = .single
-            }
-            attributed.addAttribute(.underlineStyle, value: style.rawValue, range: range)
+            attributed.addAttribute(
+                .underlineStyle, value: underlineStyleRawValue(for: attr.style), range: range)
         }
 
         let caretUTF16 = utf16Offset(ofScalarOffset: caret, in: text)
@@ -295,6 +286,20 @@ class KarukanInputController: IMKInputController {
             selectionRange: NSRange(location: caretUTF16, length: 0),
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
+    }
+}
+
+func underlineStyleRawValue(for preeditStyle: String) -> Int {
+    switch preeditStyle {
+    case "underline_dotted":
+        return NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue
+    // The focused/highlighted segment is drawn with a thick underline (the
+    // convention azooKey/mac-akaza use for marked text, since background
+    // colors are unreliable across apps).
+    case "underline_double", "highlight", "reverse":
+        return NSUnderlineStyle.thick.rawValue
+    default:
+        return NSUnderlineStyle.single.rawValue
     }
 }
 

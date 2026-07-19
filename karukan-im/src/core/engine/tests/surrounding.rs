@@ -182,7 +182,7 @@ fn test_aux_text_hides_surrounding_context() {
     engine.process_key(&press('a'));
     let aux = engine.format_aux_composing();
 
-    assert_eq!(aux, "[あ] あ");
+    assert_eq!(aux, "あ");
     assert!(!aux.contains("lctx:"), "aux was: {aux}");
     assert!(!aux.contains("rctx:"), "aux was: {aux}");
     assert!(!aux.contains("左側"), "aux was: {aux}");

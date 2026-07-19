@@ -306,10 +306,10 @@ fn test_alphabet_mode_escape_is_noop() {
 fn test_alphabet_mode_aux_text() {
     let mut engine = InputMethodEngine::new();
 
-    // In hiragana mode, aux should show [あ]
+    // The default Hiragana indicator stays hidden.
     engine.process_key(&press('a'));
     let aux_hiragana = engine.format_aux_composing();
-    assert!(aux_hiragana.starts_with("[あ]"));
+    assert_eq!(aux_hiragana, "あ");
 
     engine.reset();
 
