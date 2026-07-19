@@ -1,5 +1,6 @@
 # Karukan IME デフォルト設定
-# このファイルは ~/.config/karukan-im/config.toml にコピーして使用してください
+# このファイルは ~/Library/Application Support/com.karukan.karukan-im/config.toml
+# にコピーして使用してください
 
 [conversion]
 # ライブ変換中に生成するモデル候補数
@@ -21,7 +22,9 @@ model = "jinen-v1-small-q5"
 n_threads = 4
 # 起動時にライブ変換を有効にする
 live_conversion = true
-# ユーザー辞書: ~/.local/share/karukan-im/user_dicts/ に辞書ファイルを配置（Mozc TSV or KRKN binary）
+# ユーザー辞書:
+# ~/Library/Application Support/com.karukan.karukan-im/user_dicts/
+# に辞書ファイルを配置（Mozc TSV or KRKN binary）
 
 [learning]
 # 明示的に修正した文節の学習を有効にする

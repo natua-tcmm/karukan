@@ -368,8 +368,8 @@ impl InputMethodEngine {
         // on Escape or commit, so the user's next word lands in kana mode
         // again without an explicit toggle.
         //
-        // Two keysym shapes can produce `:` depending on how fcitx5
-        // resolves the layout: (a) the X11 `colon` keysym (0x003A)
+        // Two keysym shapes can produce `:` depending on how the frontend
+        // resolves the layout: (a) the XKB `colon` keysym (0x003A)
         // arriving directly, or (b) the `semicolon` keysym (0x003B)
         // with shift held. Accept both so we don't depend on which
         // shape the upstream stack happens to emit.
@@ -389,8 +389,8 @@ impl InputMethodEngine {
             && !key.modifiers.alt_key
         {
             // Detect Shift+letter: shift modifier with alphabetic, OR uppercase keysym.
-            // fcitx5 may resolve Shift into the keysym (sending 'A' instead of 'a'+shift),
-            // so we must also check for uppercase to handle both cases.
+            // A frontend may resolve Shift into the keysym (sending 'A'
+            // instead of 'a'+shift), so handle both cases.
             let is_shift_alpha =
                 ch.is_ascii_uppercase() || (shift_active && ch.is_ascii_alphabetic());
 
@@ -514,7 +514,7 @@ impl InputMethodEngine {
                     && !key.modifiers.alt_key
                 {
                     // Detect Shift+letter: shift modifier with alphabetic, OR uppercase keysym.
-                    // fcitx5 may resolve Shift into the keysym (sending 'A' instead of 'a'+shift).
+                    // A frontend may resolve Shift into the keysym.
                     let is_shift_alpha =
                         ch.is_ascii_uppercase() || (shift_active && ch.is_ascii_alphabetic());
 
@@ -809,8 +809,7 @@ impl InputMethodEngine {
 
         // HideCandidates is required here: the auto-suggest/live-conversion
         // window may be open while Composing, and the macOS frontend's
-        // NSPanel only closes on an explicit hide (fcitx5 resets its panel
-        // on commit implicitly, which masked this on Linux).
+        // NSPanel only closes on an explicit hide.
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))
             .with_action(EngineAction::Commit(text))

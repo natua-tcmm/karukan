@@ -1,8 +1,6 @@
-//! karukan-im: Japanese IME engine shared by the fcitx5 (Linux) and
-//! macOS frontends.
+//! karukan-im: Japanese IME engine for the macOS InputMethodKit frontend.
 //!
-//! - fcitx5 C FFI lives in the separate `karukan-fcitx5` crate.
-//! - The macOS stdio JSON-RPC server lives in [`server`] and is built
+//! The macOS stdio JSON-RPC server lives in [`server`] and is built
 //!   as the `karukan-imserver` binary, bundled inside `karukan-macos`.
 
 pub mod config;

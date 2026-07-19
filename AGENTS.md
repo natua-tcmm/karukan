@@ -4,12 +4,11 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project Overview
 
-karukan is a Japanese Input Method system for Linux and macOS, consisting of four Rust crates and a Swift package:
+karukan is a Japanese Input Method system optimized for macOS, consisting of three Rust crates and a Swift package:
 
 - **karukan-engine**: Core library — romaji-to-hiragana conversion, neural kana-kanji conversion via llama.cpp, system dictionary, learning cache, candidate rewriter (width/case/symbol variants)
 - **karukan-cli**: CLI tools and server — dictionary builder, Sudachi converter, dict viewer, AJIMEE-Bench, HTTP API server
-- **karukan-im**: Shared IME engine state machine (Empty → Composing → Conversion) and `karukan-imserver` stdio JSON-RPC server (macOS binary bundled in karukan-macos)
-- **karukan-fcitx5**: fcitx5 Linux frontend — C FFI (`src/ffi/`) and C++ addon (`fcitx5-addon/`) that wrap karukan-im
+- **karukan-im**: IME engine state machine (Empty → Composing → Conversion) and `karukan-imserver` stdio JSON-RPC server (bundled in karukan-macos)
 - **karukan-macos**: Swift/InputMethodKit frontend that spawns `karukan-imserver` as a bundled child process
 
 ## Build and Development Commands
@@ -56,26 +55,6 @@ cargo run --release --bin ajimee-bench -- evaluation_items.json
 ```bash
 cargo build -p karukan-im --release
 cargo test -p karukan-im
-```
-
-### karukan-fcitx5
-
-```bash
-cargo build -p karukan-fcitx5 --release
-cargo test -p karukan-fcitx5
-
-# Build and install fcitx5 addon
-cd karukan-fcitx5/fcitx5-addon
-
-# Option A: System install (sudo required, no FCITX_ADDON_DIRS needed)
-cmake -B build -DCMAKE_INSTALL_PREFIX=/usr
-cmake --build build -j
-sudo cmake --install build
-
-# Option B: User-local install (no sudo, requires FCITX_ADDON_DIRS)
-cmake -B build -DCMAKE_INSTALL_PREFIX=$HOME/.local
-cmake --build build -j
-cmake --install build
 ```
 
 ### karukan-macos
@@ -147,19 +126,8 @@ cargo clippy --workspace  # Lint all crates
 - `core/candidate.rs` — Candidate list with pagination support
 - `core/keycode.rs` — Key symbol definitions and key event handling
 - `core/state.rs` — Engine state definitions
-- `config/settings.rs` — User settings (`~/.config/karukan-im/config.toml` on Linux, `~/Library/Application Support/com.karukan.karukan-im/` on macOS)
+- `config/settings.rs` — User settings in `~/Library/Application Support/com.karukan.karukan-im/`
 - `server/` — stdio JSON-RPC 2.0 server for the macOS frontend (`protocol.rs` defines the wire format; `bin/karukan-imserver.rs` is the entry point)
-
-### karukan-fcitx5 (`karukan-fcitx5/`)
-
-Linux fcitx5 frontend. Wraps karukan-im via C FFI and exposes the engine to the C++ addon.
-
-- `src/ffi/mod.rs` — `KarukanEngine` opaque struct, action dispatch, cache structs, FFI macros
-- `src/ffi/lifecycle.rs` — `karukan_engine_new/init/free`
-- `src/ffi/input.rs` — `karukan_engine_process_key/reset/set_surrounding_text`
-- `src/ffi/query.rs` — All getter functions (preedit, commit, candidates, aux, timing)
-- `include/karukan.h` — C header for the fcitx5 C++ addon
-- `fcitx5-addon/src/karukan.cpp` — C++ fcitx5 wrapper
 
 ### karukan-macos (`karukan-macos/Sources/KarukanIME/`)
 
@@ -167,7 +135,7 @@ Swift/InputMethodKit frontend. All IME state lives in karukan-imserver (spawned 
 
 - `main.swift` — IMKServer startup, engine process spawn, wake-from-sleep restart, SIGPIPE handling
 - `KarukanInputController.swift` — IMKInputController; translates keys, applies engine actions (preedit/candidates/commit), JIS かな key and right-Command tap return to hiragana (exit katakana mode)
-- `KeyCodeMap.swift` — NSEvent → XKB keysym translation (same keysym representation as fcitx5), RightCommandTapDetector
+- `KeyCodeMap.swift` — NSEvent → XKB keysym translation, RightCommandTapDetector
 - `resources/*.tiff` — template menu icon (か), regenerated via `swift scripts/generate_icons.swift`; `resources/{ja,en}.lproj/InfoPlist.strings` localize the input mode name shown in the input menu
 - `EngineProcess.swift` — child process lifecycle: crash restart with exponential backoff, EOF-based clean shutdown (lets the server save its learning cache)
 - `EngineClient.swift` — JSON-RPC transport (sync for process_key, async for fire-and-forget)
@@ -178,7 +146,7 @@ Swift/InputMethodKit frontend. All IME state lives in karukan-imserver (spawned 
 
 `karukan-macos` registers **only the Japanese input mode** (`dev.togatoga.inputmethod.Karukan.Japanese`) in `Info.plist`. There is no Roman/英数 mode inside Karukan — if the user wants to type in Latin script they switch to the OS-level English input source (e.g. via Karabiner). Do not add a Roman mode back; it is intentionally absent.
 
-The engine-internal `InputMode::Alphabet` (entered via Shift+letter on Linux/fcitx5) is a separate Rust engine concept unrelated to this macOS input mode registration. Do not conflate the two.
+The engine-internal `InputMode::Alphabet` (entered via Shift+letter) is a separate Rust engine concept unrelated to this macOS input mode registration. Do not conflate the two.
 
 ## Key Design Patterns
 
@@ -189,7 +157,7 @@ The engine-internal `InputMode::Alphabet` (entered via Shift+letter on Linux/fci
 - Model registry defined in `karukan-engine/models.toml`; default models use Q5_K_M quantization
 - Live conversion (auto-suggest) splits the composing buffer into internal chunks of at most `composing_chunk_len` reading chars (default 40, configurable) so each model call stays bounded for long input. Chunking (`group_chunks`) starts a new chunk whenever the current one is full OR the character group changes between Japanese and non-Japanese (`is_japanese`: hiragana, katakana incl. `ー`, and kanji are Japanese; ASCII/full-width digits, letters, symbols, and all punctuation are non-Japanese). A non-Japanese run (digits/symbols/alphabet) is passed through to the preedit verbatim and never sent to the neural converter (which otherwise tends to drop digits mid-run, e.g. `123456`); a Japanese run is converted by the model. Because punctuation is non-Japanese, it forms its own chunk and naturally separates clauses (`今日は。明日` → `今日は`/`。`/`明日`), so there is no separate punctuation rule. A katakana word like `スーパーマーケット` is entirely Japanese, so it stays one chunk. `chunked_auto_suggest` re-chunks incrementally: it diffs the new buffer against the previous chunking by common character prefix/suffix and reconverts only the changed span (`ChunkPlan` decides which leading/trailing chunks to reuse). Each chunk's left context (lctx) is the editor surrounding text plus the converted text of the preceding chunks, truncated to `max_context_length`. Chunks are internal — the user sees one continuous preedit, and the aux text shows the current chunk's lctx as its single `lctx:`
 - Correction learning records only explicitly changed conversion segments with surrounding context; accepting live or initial candidates does not learn, and previous sentences are never offered by prefix match
-- Data files (system dictionary `dict.bin`, user dictionaries `user_dicts/`, correction learning `segment_learning.tsv`) live in the data directory: `~/.local/share/karukan-im/` on Linux, `~/Library/Application Support/com.karukan.karukan-im/` on macOS; a prebuilt `dict.tgz` is published on GitHub releases
+- Data files (system dictionary `dict.bin`, user dictionaries `user_dicts/`, correction learning `segment_learning.tsv`) live in `~/Library/Application Support/com.karukan.karukan-im/`; a prebuilt `dict.tgz` is published on GitHub releases
 - Correction learning is persisted as TSV (`segment_learning.tsv` in the data directory); saved on deactivate and engine free, not on every commit. Legacy `learning.tsv` files are left untouched but are no longer loaded
 - Learning score uses recency-weighted formula (mozc-inspired): `recency * 10.0 + ln(1 + frequency)`; eviction removes lowest-score entries when over `max_entries` (default: 10,000)
 

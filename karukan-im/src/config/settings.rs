@@ -116,14 +116,14 @@ impl Settings {
     /// Get the user dictionary directory path.
     ///
     /// All files in this directory are automatically loaded as user dictionaries.
-    /// Default: `~/.local/share/karukan-im/user_dicts/`
+    /// Default: `~/Library/Application Support/com.karukan.karukan-im/user_dicts/`
     pub fn user_dict_dir() -> Option<PathBuf> {
         Self::data_dir().map(|dir| dir.join("user_dicts"))
     }
 
     /// Get the context-aware segment learning cache file path.
     ///
-    /// Default: `~/.local/share/karukan-im/segment_learning.tsv`
+    /// Default: `~/Library/Application Support/com.karukan.karukan-im/segment_learning.tsv`
     pub fn segment_learning_file() -> Option<PathBuf> {
         Self::data_dir().map(|dir| dir.join("segment_learning.tsv"))
     }

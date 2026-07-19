@@ -28,8 +28,7 @@ impl InputMethodEngine {
     /// Full engine initialization from user settings: system dictionary,
     /// user dictionaries, correction learning, and the configured conversion model.
     ///
-    /// Shared by the fcitx5 FFI (`karukan_engine_init`) and the stdio
-    /// JSON-RPC server (`init` method).
+    /// Used by the stdio JSON-RPC server (`init` method).
     pub fn init_from_settings(&mut self, settings: &Settings) -> Result<()> {
         tracing::info!("Karukan init: model={:?}", settings.conversion.model);
 
@@ -155,7 +154,8 @@ impl InputMethodEngine {
     /// (auto-detects KRKN binary or Mozc TSV). Files are loaded in sorted
     /// order; earlier files have higher priority after merging.
     ///
-    /// Default directory: `~/.local/share/karukan-im/user_dicts/`
+    /// Default directory:
+    /// `~/Library/Application Support/com.karukan.karukan-im/user_dicts/`
     pub fn init_user_dictionaries(&mut self) {
         if self.dicts.user.is_some() {
             return;

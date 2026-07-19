@@ -18,9 +18,8 @@ struct EngineKeyEvent {
     let modifiers: KeyModifiers
 }
 
-/// Translates macOS key events into XKB keysyms, the representation the
-/// karukan engine shares with the fcitx5 frontend (see
-/// karukan-im/src/core/keycode.rs).
+/// Translates macOS key events into the XKB keysyms used by the Rust engine
+/// protocol (see `karukan-im/src/core/keycode.rs`).
 enum KeyCodeMap {
     // macOS virtual key codes (Carbon kVK_*) for non-printable keys.
     private static let specialKeys: [UInt16: UInt32] = [
@@ -80,7 +79,7 @@ enum KeyCodeMap {
         // When Control/Option mangle `characters` into a control character
         // (Ctrl+A → U+0001) or an option glyph (Option+a → å), fall back to
         // charactersIgnoringModifiers so the engine gets the plain key plus
-        // modifier flags, matching what fcitx5 delivers.
+        // modifier flags expected by the Rust engine.
         func asciiScalar(of string: String?) -> UInt32? {
             guard let scalar = string?.unicodeScalars.first,
                 (0x20...0x7e).contains(scalar.value)

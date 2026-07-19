@@ -85,7 +85,7 @@ pub struct EngineConfig {
 
 impl EngineConfig {
     /// Build an engine config from user settings (config.toml).
-    /// Shared by the fcitx5 FFI and the stdio JSON-RPC server.
+    /// Used by the stdio JSON-RPC server.
     pub fn from_settings(settings: &crate::config::Settings) -> Self {
         Self {
             live_num_candidates: settings.conversion.live_num_candidates,

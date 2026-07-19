@@ -5,8 +5,7 @@ import InputMethodKit
 ///
 /// All IME state (Empty → Composing → Conversion, romaji conversion,
 /// candidates, learning) lives in karukan-imserver; this controller only
-/// translates key events and applies the resulting UI actions, mirroring
-/// the fcitx5 addon (karukan.cpp).
+/// translates key events and applies the resulting UI actions.
 @objc(KarukanInputController)
 class KarukanInputController: IMKInputController {
     static let candidateWindow = CandidateWindowController()
@@ -54,9 +53,8 @@ class KarukanInputController: IMKInputController {
 
         guard let key = KeyCodeMap.translate(event: event) else { return false }
 
-        // Refresh the conversion context while no composition is active
-        // (mirrors the fcitx5 addon, which captures surrounding text in the
-        // Empty state). Queued before process_key on the same pipe, so the
+        // Refresh the conversion context while no composition is active.
+        // Queued before process_key on the same pipe, so the
         // engine sees it first. Skipped for function/navigation keysyms
         // (0xff00 range): they can't start a composition, and the three
         // synchronous client IPCs in sendSurroundingText would otherwise

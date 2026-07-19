@@ -287,9 +287,8 @@ impl InputMethodEngine {
 
     /// Reset the engine state
     /// Note: surrounding_context is intentionally NOT cleared here.
-    /// It is set once at activate() time and should persist through
-    /// the session. fcitx5 may send reset events between activate
-    /// and the first keyEvent, which would wipe the context.
+    /// It is set once at activation time and should persist through
+    /// the session. A reset before the first key event must not wipe it.
     pub fn reset(&mut self) {
         self.invalidate_live_results();
         self.state = InputState::Empty;
@@ -419,8 +418,8 @@ impl InputMethodEngine {
     }
 
     /// Set surrounding context from the full text plus a cursor offset in
-    /// Unicode scalar values (the unit both fcitx5 and the JSON-RPC
-    /// protocol deliver). Splits at the cursor and delegates to
+    /// Unicode scalar values (the unit the JSON-RPC protocol delivers).
+    /// Splits at the cursor and delegates to
     /// [`Self::set_surrounding_context`].
     pub fn set_surrounding_text_at(&mut self, text: &str, cursor_chars: usize) {
         let byte_offset = text

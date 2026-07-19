@@ -35,13 +35,12 @@ fn test_shift_letter_enters_alphabet_mode() {
 }
 
 #[test]
-fn test_shift_letter_fcitx5_lowercase_keysym() {
-    // fcitx5 sends lowercase keysym 'a' (0x0061) with shift modifier flag
+fn test_shift_letter_lowercase_keysym() {
+    // The protocol accepts lowercase keysym 'a' with a shift modifier.
     let mut engine = InputMethodEngine::new();
     assert!(engine.input_mode != InputMode::Alphabet);
 
-    // fcitx5 sends keysym='a' (lowercase!) with modifiers.shift_key=true
-    // This should enter alphabet mode and input uppercase 'A'
+    // This should enter alphabet mode and input uppercase 'A'.
     let event = KeyEvent::new(
         Keysym(0x0061), // lowercase 'a'
         KeyModifiers::new().with_shift(true),
@@ -66,7 +65,7 @@ fn test_shift_letter_in_hiragana_enters_alphabet_and_uppercase() {
     // Shift press
     engine.process_key(&press_key(Keysym::SHIFT_L));
 
-    // Shift+a (fcitx5 sends lowercase keysym)
+    // Shift+a as a lowercase keysym plus the shift flag.
     let event = KeyEvent::new(Keysym(0x0061), KeyModifiers::new().with_shift(true), true);
     engine.process_key(&event);
     assert!(engine.input_mode == InputMode::Alphabet);
@@ -75,8 +74,8 @@ fn test_shift_letter_in_hiragana_enters_alphabet_and_uppercase() {
 
 #[test]
 fn test_uppercase_keysym_without_shift_flag_enters_alphabet() {
-    // fcitx5 may resolve Shift into the keysym, sending 'A' (0x0041) without
-    // the shift modifier flag. This must still enter alphabet mode.
+    // A frontend may resolve Shift into the keysym, sending 'A' (0x0041)
+    // without the shift modifier flag. This must still enter alphabet mode.
     let mut engine = InputMethodEngine::new();
     assert!(engine.input_mode != InputMode::Alphabet);
 
@@ -246,23 +245,21 @@ fn test_mixed_hiragana_alphabet_input() {
     assert_eq!(engine.preedit().unwrap().text(), "わたしは");
     assert!(engine.input_mode != InputMode::Alphabet);
 
-    // Shift+L → enters alphabet mode, inputs 'L'
-    // fcitx5 sends lowercase keysym with shift flag
+    // Shift+M → enters alphabet mode, inputs 'M'
+    // Lowercase keysym with the shift flag.
     let event = KeyEvent::new(
-        Keysym(0x006c), // lowercase 'l'
+        Keysym(0x006d), // lowercase 'm'
         KeyModifiers::new().with_shift(true),
         true,
     );
     engine.process_key(&event);
     assert!(engine.input_mode == InputMode::Alphabet);
-    assert_eq!(engine.preedit().unwrap().text(), "わたしはL");
+    assert_eq!(engine.preedit().unwrap().text(), "わたしはM");
 
     // Continue typing in alphabet mode (without shift → lowercase)
-    engine.process_key(&press('i'));
-    engine.process_key(&press('n'));
-    engine.process_key(&press('u'));
-    engine.process_key(&press('x'));
-    assert_eq!(engine.preedit().unwrap().text(), "わたしはLinux");
+    engine.process_key(&press('a'));
+    engine.process_key(&press('c'));
+    assert_eq!(engine.preedit().unwrap().text(), "わたしはMac");
 }
 
 #[test]

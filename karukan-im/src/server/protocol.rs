@@ -18,9 +18,8 @@
 //! | `save_learning`        | `{}`                                     | `{}`              |
 //! | `status`               | `{}`                                     | [`StatusResult`]  |
 //!
-//! Keysyms are XKB keysym values (the same representation used by the
-//! fcitx5 FFI); the frontend is responsible for translating native key
-//! events (e.g. `NSEvent`) into XKB keysyms.
+//! Keysyms are XKB keysym values; the frontend translates native `NSEvent`
+//! values into this stable engine representation.
 //!
 //! All positions (`caret`, attribute `start`/`end`, `cursor_pos`) are in
 //! Unicode scalar values (Rust `char` counts), not bytes and not UTF-16

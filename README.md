@@ -1,54 +1,49 @@
 <div align="center">
-  <img src="icon.png" width="128" alt="karukan" />
+  <img src="icon.png" width="128" alt="Karukan" />
   <h1>Karukan</h1>
-  <p>Linux・macOS向け日本語入力システム — ニューラルかな漢字変換エンジン</p>
+  <p>macOS向けのニューラル日本語入力システム</p>
 
-  [![CI (engine)](https://github.com/togatoga/karukan/actions/workflows/karukan-engine-ci.yml/badge.svg)](https://github.com/togatoga/karukan/actions/workflows/karukan-engine-ci.yml)
-  [![CI (im)](https://github.com/togatoga/karukan/actions/workflows/karukan-im-ci.yml/badge.svg)](https://github.com/togatoga/karukan/actions/workflows/karukan-im-ci.yml)
-  [![CI (fcitx5)](https://github.com/togatoga/karukan/actions/workflows/karukan-fcitx5-ci.yml/badge.svg)](https://github.com/togatoga/karukan/actions/workflows/karukan-fcitx5-ci.yml)
-  [![CI (macos)](https://github.com/togatoga/karukan/actions/workflows/karukan-macos-ci.yml/badge.svg)](https://github.com/togatoga/karukan/actions/workflows/karukan-macos-ci.yml)
+  [![macOS CI](https://github.com/natua-tcmm/karukan/actions/workflows/karukan-macos-ci.yml/badge.svg)](https://github.com/natua-tcmm/karukan/actions/workflows/karukan-macos-ci.yml)
   [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 </div>
 
 <div align="center">
-  <img src="images/demo.gif" width="800" alt="karukan demo" />
+  <img src="images/demo.gif" width="800" alt="Karukanの変換デモ" />
 </div>
-
-## プロジェクト構成
-
-| クレート | 説明 |
-|---------|------|
-| [karukan-fcitx5](karukan-fcitx5/) | Linux向けIMEフロントエンド — fcitx5アドオン + C FFI |
-| [karukan-macos](karukan-macos/) | macOS向けIMEフロントエンド — Swift/InputMethodKit |
-| [karukan-im](karukan-im/) | 共有IMEエンジン — ステートマシン、ローマ字変換、karukan-imserver(macOS向けJSON-RPCサーバー) |
-| [karukan-engine](karukan-engine/) | コアライブラリ — ローマ字→ひらがな変換 + llama.cppによるニューラルかな漢字変換 |
-| [karukan-cli](karukan-cli/) | CLIツール・サーバー — 辞書ビルド、Sudachi辞書生成、辞書ビューア、AJIMEE-Bench、HTTPサーバー |
 
 ## 特徴
 
-- **ニューラルかな漢字変換**: GPT-2ベースのモデルをllama.cppで推論し、高度な日本語変換
-- **ライブ変換**: 入力と同時に変換結果をリアルタイム表示。Spaceを押さずに変換が進む
-- **文節変換**: 長文を辞書ラティスで分割し、文節ごとに候補選択・移動・境界調整が可能
-- **コンテキスト対応**: 周辺テキストを考慮した日本語変換
-- **変換学習**: 明示的に修正した文節だけを左右の文脈付きで記憶
-- **システム辞書**: [SudachiDict](https://github.com/WorksApplications/SudachiDict)の辞書データからシステム辞書を構築
-- **候補リライター (Mozcから移植)**: 半角カタカナ、英字の大文字小文字・全角半角、記号の関連候補、数字の各種表記（漢数字・大字・ローマ数字・丸数字・16/8/2進数）を自動生成。各候補にはMozc由来の注釈（「半角カタカナ」「16進数」など）が付く
-- **絵文字入力**: かな読み（`ぴえん` → 🥺、`きんにく` → 💪）と Slack 風 `:trigger` クエリ（`:smile` → 😄、`:halo` → 😇）の両方をサポート
-
-> **Note:** 初回起動時にHugging Faceからモデルをダウンロードするため、初回の変換開始までに時間がかかります。2回目以降はダウンロード済みのモデルが使用されます。
+- 入力と同時に候補を表示するライブ変換
+- 文脈を考慮するニューラルかな漢字変換
+- 文節ごとの候補選択・境界調整
+- 修正した文節を左右の文脈とともに学習
 
 ## インストール
 
-- **Linux (fcitx5)**: [karukan-fcitx5 の README](karukan-fcitx5/README.md#install) を参照
-- **macOS**: [karukan-macos の README](karukan-macos/README.md) を参照
+macOS 13以降と、Rust・Swiftの開発環境が必要です。
 
-辞書ソースの取得・正規化・配布については、[辞書リリース手順](docs/dictionary-release.md)と[辞書ライセンス確認表](docs/dictionary-licenses.md)を参照してください。
+```bash
+git clone https://github.com/natua-tcmm/karukan.git
+cd karukan/karukan-macos
+make install
+```
+
+初回のみmacOSからログアウトして再ログインし、「システム設定」→「キーボード」→
+「入力ソース」からKarukanを追加してください。
+
+詳しい手順、更新方法、設定項目は
+[macOS版README](karukan-macos/README.md)を参照してください。
 
 ## ライセンス
 
-MIT OR Apache-2.0 のデュアルライセンスで提供しています。
+このリポジトリは[togatoga/karukan](https://github.com/togatoga/karukan)を基にした
+forkです。ソースコードは原著作者の表示を保持し、
+[MIT License](LICENSE-MIT)または[Apache License 2.0](LICENSE-APACHE)の条件で
+利用・改変・再配布できます。
 
-- [MIT License](LICENSE-MIT)
-- [Apache License 2.0](LICENSE-APACHE)
-
-[karukan-engine/data/](karukan-engine/data/) 配下には [Mozc](https://github.com/google/mozc)（Google製日本語入力システム）から派生したデータを含み、こちらは [BSD 3-Clause License](http://opensource.org/licenses/BSD-3-Clause) のもとで配布されています。各派生ファイルの由来およびMozcの著作権表記は [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES) を参照してください。
+Mozc由来データや形態素解析辞書などの表示は
+[THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES)、Rust依存ライブラリは
+[THIRD_PARTY_CARGO_LICENSES.html](THIRD_PARTY_CARGO_LICENSES.html)、変換モデルは
+[MODEL_LICENSES.md](MODEL_LICENSES.md)を参照してください。システム辞書を再配布する
+場合は、別途[辞書ライセンス確認表](docs/dictionary-licenses.md)に従ってください。
+公開前の確認事項は[再配布チェックリスト](docs/redistribution.md)にまとめています。

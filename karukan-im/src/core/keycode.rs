@@ -175,8 +175,7 @@ pub struct KeyModifiers {
     pub super_key: bool,
 }
 
-/// XKB modifier bitmask constants (used by both X11 and Wayland via fcitx5)
-/// used in the FFI boundary between C++ (fcitx5) and Rust.
+/// XKB-style modifier bitmask constants used by the JSON-RPC boundary.
 impl KeyModifiers {
     pub const SHIFT_MASK: u32 = 1; // ShiftMask
     pub const CONTROL_MASK: u32 = 4; // ControlMask

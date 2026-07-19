@@ -4,9 +4,9 @@ INSTALL_DIR = $(HOME)/Library/Input Methods
 CARGO_MANIFEST = ../Cargo.toml
 CARGO_TARGET = ../target
 DATA_DIR = $(HOME)/Library/Application Support/com.karukan.karukan-im
-DICT_URL = https://github.com/togatoga/karukan/releases/latest/download/dict.tgz
+DICT_URL ?= https://github.com/togatoga/karukan/releases/latest/download/dict.tgz
 
-.PHONY: all build build-universal bundle install install-dict install-models test fmt lint clean
+.PHONY: all build build-universal bundle install install-dict install-models licenses test fmt lint clean
 
 all: build
 
@@ -44,8 +44,15 @@ bundle: build
 	cp .build/release/KarukanIME $(APP)/Contents/MacOS/
 	cp $(CARGO_TARGET)/release/karukan-imserver $(APP)/Contents/MacOS/
 	cp -r resources/* $(APP)/Contents/Resources/
+	cp ../LICENSE-MIT $(APP)/Contents/Resources/
 	cp ../THIRD_PARTY_LICENSES $(APP)/Contents/Resources/
+	cp ../THIRD_PARTY_CARGO_LICENSES.html $(APP)/Contents/Resources/
+	cp ../MODEL_LICENSES.md $(APP)/Contents/Resources/
 	codesign --force --deep --sign - $(APP)
+
+# Requires cargo-about: cargo install cargo-about --features cli
+licenses:
+	cd .. && cargo about generate about.hbs -o THIRD_PARTY_CARGO_LICENSES.html
 
 # Download the prebuilt system dictionary unless one is already installed.
 # Non-fatal on failure (e.g. offline) — the IME works model-only without it.
@@ -62,6 +69,10 @@ install-dict:
 		  cp "$$tmp/dict.bin" "$(DATA_DIR)/" && \
 		  if [ -f "$$tmp/DICTIONARY_LICENSES.md" ]; then \
 		    cp "$$tmp/DICTIONARY_LICENSES.md" "$(DATA_DIR)/"; \
+		  elif [ -d "$$tmp/docs" ]; then \
+		    rm -rf "$(DATA_DIR)/dictionary-licenses" && \
+		    mkdir -p "$(DATA_DIR)/dictionary-licenses" && \
+		    cp -R "$$tmp/docs/." "$(DATA_DIR)/dictionary-licenses/"; \
 		  fi && \
 		  if [ -f "$$tmp/dictionary-sources.toml" ]; then \
 		    cp "$$tmp/dictionary-sources.toml" "$(DATA_DIR)/"; \

@@ -30,7 +30,7 @@ final class KeyCodeMapTests: XCTestCase {
 
     func testControlKeyFallsBackToIgnoringModifiers() {
         // Ctrl+A: `characters` is the control character U+0001; the engine
-        // wants the plain key plus the control flag (like fcitx5 sends).
+        // wants the plain key plus the control flag.
         let event = KeyCodeMap.translate(
             keyCode: 0, characters: "\u{01}", charactersIgnoringModifiers: "a",
             flags: [.control])

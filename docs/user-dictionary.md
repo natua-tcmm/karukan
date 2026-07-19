@@ -38,7 +38,7 @@ cargo run --release --bin karukan-dict -- build --format mozc input.tsv -o user_
 ユーザー辞書ディレクトリに辞書ファイルを配置するだけで自動的に読み込まれます。
 
 ```
-~/.local/share/karukan-im/user_dicts/
+~/Library/Application Support/com.karukan.karukan-im/user_dicts/
 ├── my_dict.txt          ← Mozc TSV 形式
 ├── nico_dict.bin        ← KRKN バイナリ形式
 └── another.txt          ← ファイルを置くだけで有効
@@ -66,10 +66,11 @@ cargo run --release --bin karukan-dict -- build --format mozc input.tsv -o user_
 
 ```bash
 # ディレクトリ作成
-mkdir -p ~/.local/share/karukan-im/user_dicts
+USER_DICT_DIR="$HOME/Library/Application Support/com.karukan.karukan-im/user_dicts"
+mkdir -p "$USER_DICT_DIR"
 
 # ダウンロードして配置
-curl -L -o ~/.local/share/karukan-im/user_dicts/nico_dict.txt \
+curl -L -o "$USER_DICT_DIR/nico_dict.txt" \
   https://raw.githubusercontent.com/ncaq/dic-nico-intersection-pixiv/master/public/dic-nico-intersection-pixiv-google.txt
 ```
 

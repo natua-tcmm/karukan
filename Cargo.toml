@@ -1,13 +1,13 @@
 [workspace]
-members = ["karukan-engine", "karukan-cli", "karukan-im", "karukan-fcitx5"]
+members = ["karukan-engine", "karukan-cli", "karukan-im"]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.92"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/togatoga/karukan"
-homepage = "https://github.com/togatoga/karukan"
+repository = "https://github.com/natua-tcmm/karukan"
+homepage = "https://github.com/natua-tcmm/karukan"
 
 [workspace.dependencies]
 # Shared across all 3 crates

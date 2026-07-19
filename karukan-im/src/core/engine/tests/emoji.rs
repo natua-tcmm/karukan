@@ -2,8 +2,7 @@
 
 use super::*;
 
-/// Press `:` (keysym 0x003A, sent with Shift on a US layout, but
-/// fcitx5 normally resolves it as the literal keysym).
+/// Press `:` as the literal keysym 0x003A.
 fn press_colon() -> KeyEvent {
     KeyEvent::press(Keysym(b':' as u32))
 }

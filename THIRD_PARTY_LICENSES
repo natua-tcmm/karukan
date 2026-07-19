@@ -1,4 +1,11 @@
 ===============================================================================
+Rust dependencies
+===============================================================================
+
+License texts and attribution for Rust crates used by this repository are
+generated with cargo-about and distributed as THIRD_PARTY_CARGO_LICENSES.html.
+
+===============================================================================
 Mozc - Japanese Input Method Editor
 https://github.com/google/mozc
 ===============================================================================

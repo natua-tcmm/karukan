@@ -2,7 +2,7 @@
 name = "karukan-im"
 version = "0.1.0"
 edition.workspace = true
-description = "Japanese IME engine shared by the fcitx5 and macOS frontends"
+description = "Japanese IME engine server for the macOS InputMethodKit frontend"
 license.workspace = true
 authors = ["togatoga"]
 repository.workspace = true
