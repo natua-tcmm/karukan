@@ -992,6 +992,20 @@ impl InputMethodEngine {
             .collect()
     }
 
+    /// Return the highest-priority exact user-dictionary surface for live conversion.
+    ///
+    /// Live conversion uses this separately from the combined dictionary lookup so
+    /// a system-dictionary hit does not unexpectedly replace the model output.
+    pub(super) fn lookup_user_dict_live_surface(&self, reading: &str) -> Option<String> {
+        self.dicts
+            .user
+            .as_ref()?
+            .exact_match_search(reading)?
+            .candidates
+            .first()
+            .map(|candidate| candidate.surface.clone())
+    }
+
     /// Build rule-based rewriter variants for the reading itself (e.g. for
     /// symbol input `「` → `『`, `【`, `（`, ...). Used in the auto-suggest path
     /// so users see mozc-style symbol variants without pressing Space first.

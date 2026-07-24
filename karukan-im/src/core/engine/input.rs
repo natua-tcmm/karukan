@@ -54,6 +54,18 @@ fn limit_whole_candidates(candidates: &mut Vec<Candidate>) {
 }
 
 impl InputMethodEngine {
+    /// Pick the visible live-conversion surface.
+    ///
+    /// A single hiragana remains raw by design. For longer readings, an exact
+    /// user-dictionary entry takes precedence over model inference.
+    fn preferred_live_surface(&self, reading: &str, model_surface: Option<&str>) -> Option<String> {
+        if should_prioritize_single_hiragana(self.input_mode, reading) {
+            return Some(reading.to_string());
+        }
+        self.lookup_user_dict_live_surface(reading)
+            .or_else(|| model_surface.map(str::to_string))
+    }
+
     /// Refresh the input state: rebuild preedit and run auto-suggest for candidates.
     pub(super) fn refresh_input_state(&mut self) -> EngineResult {
         // Alphabet mode with active live conversion but no kana left to convert:
@@ -98,8 +110,10 @@ impl InputMethodEngine {
             // rewriter variants. The rewriter path produces mozc-style symbol variants
             // (e.g. `「` → `『`, `【`, ...) for symbol-only inputs where the model is skipped.
             let reading = self.input_buf.text.clone();
-            if self.live.enabled && should_prioritize_single_hiragana(self.input_mode, &reading) {
-                self.live.text = reading.clone();
+            if self.live.enabled && self.input_mode != InputMode::Katakana {
+                self.live.text = self
+                    .preferred_live_surface(&reading, None)
+                    .unwrap_or_default();
             } else {
                 self.live.clear();
             }
@@ -107,6 +121,14 @@ impl InputMethodEngine {
             let mut all_candidates = self.lookup_learning_candidates(&reading);
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
             append_candidates_dedup(&mut all_candidates, self.lookup_rewriter_variants(&reading));
+            if !self.live.text.is_empty() {
+                let live_text = self.live.text.clone();
+                promote_composing_candidate(
+                    &mut all_candidates,
+                    &live_text,
+                    Candidate::with_reading(&live_text, &reading),
+                );
+            }
             prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
             limit_whole_candidates(&mut all_candidates);
             if all_candidates.is_empty() {
@@ -126,11 +148,9 @@ impl InputMethodEngine {
 
         // Live conversion mode: show converted text in preedit
         if self.live.enabled && self.input_mode != InputMode::Katakana {
-            self.live.text = if should_prioritize_single_hiragana(self.input_mode, &reading) {
-                reading.clone()
-            } else {
-                candidates[0].clone()
-            };
+            self.live.text = self
+                .preferred_live_surface(&reading, candidates.first().map(String::as_str))
+                .unwrap_or_default();
             let preedit = self.set_composing_state();
 
             // Same candidate ordering as normal auto-suggest (learning → model →
@@ -189,15 +209,14 @@ impl InputMethodEngine {
     /// Rebuild composing UI without waiting for model inference.
     pub(super) fn refresh_without_model(&mut self) -> EngineResult {
         let reading = self.input_buf.text.clone();
-        let preserved_prefix = self.live.enabled
-            && self.input_mode != InputMode::Katakana
-            && self.live.rebuild_for_reading(&reading);
-        if !preserved_prefix
-            && self.live.enabled
-            && should_prioritize_single_hiragana(self.input_mode, &reading)
-        {
-            self.live.text = reading.clone();
-        } else if !preserved_prefix {
+        let live_active = self.live.enabled && self.input_mode != InputMode::Katakana;
+        let preferred = live_active
+            .then(|| self.preferred_live_surface(&reading, None))
+            .flatten();
+        if let Some(surface) = preferred {
+            self.live.set_applied_prefix(reading.clone(), surface);
+            self.live.rebuild_for_reading(&reading);
+        } else if !live_active || !self.live.rebuild_for_reading(&reading) {
             self.live.clear();
         }
         let preedit = self.set_composing_state();
@@ -289,15 +308,20 @@ impl InputMethodEngine {
         let suffix = current_reading
             .strip_prefix(&result_reading)
             .unwrap_or_default();
-        let applied_prefix = if should_prioritize_single_hiragana(self.input_mode, &result_reading)
-        {
-            result_reading.clone()
-        } else {
-            prefix_candidates[0].clone()
-        };
         if self.live.enabled && self.input_mode != InputMode::Katakana {
-            self.live
-                .set_applied_prefix(result_reading.clone(), applied_prefix);
+            if let Some(surface) = self.preferred_live_surface(&current_reading, None) {
+                self.live
+                    .set_applied_prefix(current_reading.clone(), surface);
+            } else {
+                let applied_prefix = self
+                    .preferred_live_surface(
+                        &result_reading,
+                        prefix_candidates.first().map(String::as_str),
+                    )
+                    .unwrap_or_else(|| result_reading.clone());
+                self.live
+                    .set_applied_prefix(result_reading.clone(), applied_prefix);
+            }
             self.live.rebuild_for_reading(&current_reading);
         } else {
             self.live.clear();

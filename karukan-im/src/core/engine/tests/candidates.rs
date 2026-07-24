@@ -1,5 +1,7 @@
 use super::*;
-use karukan_engine::SegmentLearningCache;
+use std::io::Write;
+
+use karukan_engine::{Dictionary, SegmentLearningCache};
 
 // --- Candidate preservation tests ---
 
@@ -39,6 +41,16 @@ fn learn(engine: &mut InputMethodEngine, reading: &str, surface: &str) {
     let mut cache = SegmentLearningCache::new(100);
     cache.record(reading, surface, None, None);
     engine.segment_learning = Some(cache);
+}
+
+fn user_dict_with(reading: &str, surface: &str) -> Dictionary {
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    let json = format!(
+        r#"[{{"reading":"{reading}","candidates":[{{"surface":"{surface}","score":1.0}}]}}]"#
+    );
+    tmp.write_all(json.as_bytes()).unwrap();
+    tmp.flush().unwrap();
+    Dictionary::build_from_json(tmp.path()).unwrap()
 }
 
 #[test]
@@ -103,6 +115,53 @@ fn multi_character_live_text_is_first_and_whole_candidates_are_limited_to_three(
     assert_eq!(candidates.first().map(String::as_str), Some("使用"));
     assert_eq!(candidates.len(), WHOLE_CANDIDATE_LIMIT);
     assert!(candidates.iter().any(|candidate| candidate == "私用"));
+}
+
+#[test]
+fn exact_user_dictionary_entry_becomes_live_text_without_model() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with("かるかん", "karukan"));
+    engine.input_buf.text = "かるかん".to_string();
+    engine.input_buf.cursor_pos = 4;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("かるかん"),
+        romaji_buffer: String::new(),
+    };
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(engine.live.text, "karukan");
+    assert_eq!(engine.preedit().map(Preedit::text), Some("karukan"));
+    assert_eq!(candidates.first().map(String::as_str), Some("karukan"));
+}
+
+#[test]
+fn background_model_result_does_not_replace_exact_user_dictionary_live_text() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with("かるかん", "karukan"));
+    engine.input_buf.text = "かるかん".to_string();
+    engine.input_buf.cursor_pos = 4;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("かるかん"),
+        romaji_buffer: String::new(),
+    };
+
+    engine.apply_background_candidates(
+        "かるかん".to_string(),
+        "かるかん".to_string(),
+        vec!["軽羹".to_string()],
+    );
+
+    assert_eq!(engine.live.text, "karukan");
+    assert_eq!(engine.preedit().map(Preedit::text), Some("karukan"));
+    assert_eq!(
+        engine
+            .composing_candidates
+            .as_ref()
+            .and_then(CandidateList::selected_text),
+        Some("karukan")
+    );
 }
 
 #[test]
