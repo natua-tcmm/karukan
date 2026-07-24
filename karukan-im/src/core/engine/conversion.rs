@@ -13,6 +13,7 @@ use crate::core::engine::long_conversion::{
 };
 use crate::core::engine::morphology::{
     SurfaceSegment, model_candidate_preserves_reading, segment_live_surface,
+    wave_dash_count_matches,
 };
 use crate::core::engine::reading_correction::{
     correction_description, interleave_model_candidates, zu_du_reading_variants,
@@ -1408,6 +1409,13 @@ impl InputMethodEngine {
             return;
         };
         for (reading, surface, left_hint, right_hint) in records {
+            if !wave_dash_count_matches(&surface, &reading) {
+                debug!(
+                    "Skipping segment learning with mismatched wave-dash count: reading=\"{}\" surface=\"{}\"",
+                    reading, surface
+                );
+                continue;
+            }
             cache.record(
                 &reading,
                 &surface,

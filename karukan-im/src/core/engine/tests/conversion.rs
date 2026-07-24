@@ -923,6 +923,53 @@ fn accepting_initial_segment_does_not_enter_segment_learning() {
 }
 
 #[test]
+fn segment_with_added_wave_dash_does_not_enter_learning() {
+    use crate::core::state::{ConversionSegment, ConversionSession};
+
+    let segments = vec![ConversionSegment::new(
+        0..1,
+        "ら".into(),
+        CandidateList::from_strings(["ら", "ら〜"]),
+    )];
+    let mut engine = InputMethodEngine::new();
+    engine.segment_learning = Some(karukan_engine::SegmentLearningCache::new(100));
+    engine.state = InputState::Conversion {
+        session: ConversionSession::segmented("ら".into(), segments),
+    };
+
+    engine.select_candidate_on_page(1);
+    engine.process_key(&press_key(Keysym::RETURN));
+
+    assert_eq!(engine.segment_learning.as_ref().unwrap().entry_count(), 0);
+}
+
+#[test]
+fn segment_learning_accepts_equivalent_wave_dash_forms() {
+    use crate::core::state::{ConversionSegment, ConversionSession};
+
+    let segments = vec![ConversionSegment::new(
+        0..2,
+        "ら〜".into(),
+        CandidateList::from_strings(["ら〜", "ら～"]),
+    )];
+    let mut engine = InputMethodEngine::new();
+    engine.segment_learning = Some(karukan_engine::SegmentLearningCache::new(100));
+    engine.state = InputState::Conversion {
+        session: ConversionSession::segmented("ら〜".into(), segments),
+    };
+
+    engine.select_candidate_on_page(1);
+    engine.process_key(&press_key(Keysym::RETURN));
+
+    let learned = engine
+        .segment_learning
+        .as_ref()
+        .unwrap()
+        .lookup("ら〜", None, None);
+    assert!(learned.iter().any(|(entry, _)| entry.surface == "ら～"));
+}
+
+#[test]
 fn segment_learning_precedes_initial_whole_reading_candidate() {
     let mut engine = InputMethodEngine::new();
     let mut cache = karukan_engine::SegmentLearningCache::new(100);

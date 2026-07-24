@@ -328,6 +328,26 @@ mod tests {
         assert_eq!(candidates, ["だけど"]);
     }
 
+    #[test]
+    fn wave_dash_candidate_is_removed_before_the_next_valid_live_candidate() {
+        let candidates = validated_live_candidate_texts_for_test(
+            "だから",
+            vec![model_candidate("だから〜"), model_candidate("ダカラ")],
+        );
+
+        assert_eq!(candidates, ["ダカラ"]);
+    }
+
+    #[test]
+    fn raw_reading_is_used_when_all_live_candidates_add_a_wave_dash() {
+        let candidates = validated_live_candidate_texts_for_test(
+            "だから",
+            vec![model_candidate("だから〜"), model_candidate("だから～")],
+        );
+
+        assert_eq!(candidates, ["だから"]);
+    }
+
     fn validated_live_candidate_texts_for_test(
         reading: &str,
         candidates: Vec<ModelCandidate>,

@@ -82,7 +82,22 @@ fn contains_kanji(text: &str) -> bool {
     })
 }
 
+/// Whether the converted surface preserves the number of wave-dash characters
+/// in the reading. U+301C (`〜`) and U+FF5E (`～`) are treated as equivalent:
+/// the model may normalize one to the other, but must not add or remove one.
+pub(super) fn wave_dash_count_matches(surface: &str, reading: &str) -> bool {
+    fn count(text: &str) -> usize {
+        text.chars().filter(|ch| matches!(ch, '〜' | '～')).count()
+    }
+
+    count(surface) == count(reading)
+}
+
 /// Whether a model candidate should survive the conservative reading check.
+///
+/// Wave-dash characters must be preserved by count, treating `〜` and `～` as
+/// equivalent. This rejects model additions such as `だから` → `だから〜`
+/// before they can reach live display or morphological segmentation.
 ///
 /// Kana-only output can be checked exactly after width/script normalization,
 /// so a free-form rewrite such as `だけど` → `だし` is rejected while
@@ -90,7 +105,7 @@ fn contains_kanji(text: &str) -> bool {
 /// tokenizing a surface in isolation cannot disambiguate readings such as
 /// `後` (`あと` / `のち`), and rejecting those would damage names and places.
 pub(super) fn model_candidate_preserves_reading(surface: &str, reading: &str) -> bool {
-    if surface.is_empty() || reading.is_empty() {
+    if surface.is_empty() || reading.is_empty() || !wave_dash_count_matches(surface, reading) {
         return false;
     }
     let normalized_surface = karukan_engine::normalize_nfkc(surface);
@@ -289,6 +304,20 @@ mod tests {
         assert!(model_candidate_preserves_reading("だけど", "だけど"));
         assert!(model_candidate_preserves_reading("ダケド", "だけど"));
         assert!(model_candidate_preserves_reading("ﾀﾞｹﾄﾞ", "だけど"));
+    }
+
+    #[test]
+    fn rejects_model_candidates_that_add_or_remove_a_wave_dash() {
+        assert!(!model_candidate_preserves_reading("だから〜", "だから"));
+        assert!(!model_candidate_preserves_reading("だから～", "だから"));
+        assert!(!model_candidate_preserves_reading("だから", "だから〜"));
+        assert!(!model_candidate_preserves_reading("だから〜〜", "だから～"));
+    }
+
+    #[test]
+    fn treats_both_wave_dash_forms_as_equivalent_by_count() {
+        assert!(model_candidate_preserves_reading("だから～", "だから〜"));
+        assert!(model_candidate_preserves_reading("だから〜", "だから～"));
     }
 
     #[test]
