@@ -137,6 +137,44 @@ fn exact_user_dictionary_entry_becomes_live_text_without_model() {
 }
 
 #[test]
+fn zu_du_typo_finds_dictionary_candidate_and_marks_the_corrected_reading() {
+    let mut engine = InputMethodEngine::new();
+    engine.dicts.system = Some(user_dict_with("きづく", "気付く"));
+
+    let candidates = engine.lookup_dict_candidates("きずく");
+
+    assert_eq!(
+        candidates.first().map(|candidate| candidate.text.as_str()),
+        Some("気付く")
+    );
+    assert_eq!(
+        candidates
+            .first()
+            .and_then(|candidate| candidate.description.as_deref()),
+        Some("ず・づ補正: きづく")
+    );
+}
+
+#[test]
+fn zu_du_typo_can_use_an_exact_user_dictionary_entry_for_live_conversion() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with("つづく", "続く"));
+    engine.input_buf.text = "つずく".to_string();
+    engine.input_buf.cursor_pos = 3;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("つずく"),
+        romaji_buffer: String::new(),
+    };
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(engine.live.text, "続く");
+    assert_eq!(engine.preedit().map(Preedit::text), Some("続く"));
+    assert_eq!(candidates.first().map(String::as_str), Some("続く"));
+}
+
+#[test]
 fn background_model_result_does_not_replace_exact_user_dictionary_live_text() {
     let mut engine = make_live_conversion_engine();
     engine.dicts.user = Some(user_dict_with("かるかん", "karukan"));

@@ -14,6 +14,9 @@ use crate::core::engine::long_conversion::{
 use crate::core::engine::morphology::{
     SurfaceSegment, model_candidate_preserves_reading, segment_live_surface,
 };
+use crate::core::engine::reading_correction::{
+    correction_description, interleave_model_candidates, zu_du_reading_variants,
+};
 
 /// Maximum number of learning candidates to show
 const MAX_LEARNING_CANDIDATES: usize = 3;
@@ -240,7 +243,6 @@ impl InputMethodEngine {
         let Some(converter) = self.converters.kanji.as_ref() else {
             return vec![];
         };
-        let katakana = karukan_engine::hiragana_to_katakana(reading);
         let model_name = converter.model_display_name().to_string();
         let candidate_count = num_candidates.max(1);
         debug!(
@@ -249,11 +251,20 @@ impl InputMethodEngine {
         );
 
         let start = Instant::now();
-        let candidates = converter
-            .convert_blocking(&katakana, api_context, candidate_count)
+        let groups = zu_du_reading_variants(reading)
             .into_iter()
-            .filter(|candidate| model_candidate_preserves_reading(&candidate.text, reading))
+            .map(|variant| {
+                let katakana = karukan_engine::hiragana_to_katakana(&variant);
+                converter
+                    .convert_blocking(&katakana, api_context, candidate_count)
+                    .into_iter()
+                    .filter(|candidate| {
+                        model_candidate_preserves_reading(&candidate.text, &variant)
+                    })
+                    .collect()
+            })
             .collect();
+        let candidates = interleave_model_candidates(groups, candidate_count);
 
         self.metrics.conversion_ms += start.elapsed().as_millis() as u64;
         self.metrics.model_name = model_name;
@@ -561,44 +572,59 @@ impl InputMethodEngine {
     fn search_dictionaries(&self, reading: &str, limit: usize) -> Vec<ConversionCandidate> {
         let mut candidates = Vec::new();
         let mut seen = HashSet::new();
+        let reading_variants = zu_du_reading_variants(reading);
 
         // User dictionary (higher priority)
-        if let Some(dict) = &self.dicts.user
-            && let Some(result) = dict.exact_match_search(reading)
-        {
-            for cand in result.candidates {
-                if candidates.len() >= limit {
-                    break;
-                }
-                if seen.insert(cand.surface.clone()) {
-                    candidates.push(
-                        ConversionCandidate::new(
-                            cand.surface.clone(),
-                            CandidateSource::UserDictionary,
-                        )
-                        .with_raw_score(Some(cand.score))
-                        .with_description(cand.description.clone()),
-                    );
+        if let Some(dict) = &self.dicts.user {
+            for variant in &reading_variants {
+                if let Some(result) = dict.exact_match_search(variant) {
+                    for cand in result.candidates {
+                        if candidates.len() >= limit {
+                            break;
+                        }
+                        if seen.insert(cand.surface.clone()) {
+                            let description = if variant == reading {
+                                cand.description.clone()
+                            } else {
+                                correction_description(cand.description.clone(), variant)
+                            };
+                            candidates.push(
+                                ConversionCandidate::new(
+                                    cand.surface.clone(),
+                                    CandidateSource::UserDictionary,
+                                )
+                                .with_raw_score(Some(cand.score))
+                                .with_description(description),
+                            );
+                        }
+                    }
                 }
             }
         }
 
         // System dictionary (sorted by score)
-        if let Some(dict) = &self.dicts.system
-            && let Some(result) = dict.exact_match_search(reading)
-        {
-            let mut dict_candidates: Vec<_> = result.candidates.to_vec();
-            dict_candidates.sort_by(|a, b| a.score.total_cmp(&b.score));
-            for cand in dict_candidates {
-                if candidates.len() >= limit {
-                    break;
-                }
-                if seen.insert(cand.surface.clone()) {
-                    candidates.push(
-                        ConversionCandidate::new(cand.surface, CandidateSource::Dictionary)
-                            .with_raw_score(Some(cand.score))
-                            .with_description(cand.description),
-                    );
+        if let Some(dict) = &self.dicts.system {
+            for variant in &reading_variants {
+                if let Some(result) = dict.exact_match_search(variant) {
+                    let mut dict_candidates: Vec<_> = result.candidates.to_vec();
+                    dict_candidates.sort_by(|a, b| a.score.total_cmp(&b.score));
+                    for cand in dict_candidates {
+                        if candidates.len() >= limit {
+                            break;
+                        }
+                        if seen.insert(cand.surface.clone()) {
+                            let description = if variant == reading {
+                                cand.description
+                            } else {
+                                correction_description(cand.description, variant)
+                            };
+                            candidates.push(
+                                ConversionCandidate::new(cand.surface, CandidateSource::Dictionary)
+                                    .with_raw_score(Some(cand.score))
+                                    .with_description(description),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -644,11 +670,25 @@ impl InputMethodEngine {
         reading: &str,
         limit: usize,
     ) -> Vec<ConversionCandidate> {
-        self.dictionary_lattice_paths(reading, limit)
-            .into_iter()
-            // A fully unknown path is the hiragana fallback, not a dictionary result.
-            .filter(|path| path.segments.iter().any(|segment| segment.source.is_some()))
-            .map(|path| {
+        let variants = zu_du_reading_variants(reading);
+        let path_groups: Vec<_> = variants
+            .iter()
+            .map(|variant| self.dictionary_lattice_paths(variant, limit))
+            .collect();
+        let max_group_len = path_groups.iter().map(Vec::len).max().unwrap_or(0);
+        let mut candidates = Vec::new();
+        let mut seen = HashSet::new();
+        for rank in 0..max_group_len {
+            for (variant, paths) in variants.iter().zip(&path_groups) {
+                let Some(path) = paths.get(rank) else {
+                    continue;
+                };
+                // A fully unknown path is the hiragana fallback, not a dictionary result.
+                if !path.segments.iter().any(|segment| segment.source.is_some())
+                    || !seen.insert(path.surface.clone())
+                {
+                    continue;
+                }
                 let mut descriptions = Vec::new();
                 for description in path
                     .segments
@@ -659,11 +699,23 @@ impl InputMethodEngine {
                         descriptions.push(description);
                     }
                 }
-                ConversionCandidate::new(path.surface, CandidateSource::Dictionary)
-                    .with_raw_score(Some(path.score))
-                    .with_description((!descriptions.is_empty()).then(|| descriptions.join(" / ")))
-            })
-            .collect()
+                let description = (!descriptions.is_empty()).then(|| descriptions.join(" / "));
+                let description = if variant == reading {
+                    description
+                } else {
+                    correction_description(description, variant)
+                };
+                candidates.push(
+                    ConversionCandidate::new(path.surface.clone(), CandidateSource::Dictionary)
+                        .with_raw_score(Some(path.score))
+                        .with_description(description),
+                );
+                if candidates.len() == limit {
+                    return candidates;
+                }
+            }
+        }
+        candidates
     }
 
     /// Generate long-input candidates whose individual spans may independently
@@ -960,17 +1012,26 @@ impl InputMethodEngine {
         let mut seen = HashSet::new();
         let label = CandidateSource::Learning.label().to_string();
 
-        for (entry, _score) in cache.lookup(reading, left_hint.as_deref(), right_hint.as_deref()) {
-            if candidates.len() >= MAX_LEARNING_CANDIDATES {
-                break;
-            }
-            if seen.insert(entry.surface.clone()) {
-                candidates.push(Candidate {
-                    text: entry.surface,
-                    reading: Some(reading.to_string()),
-                    source_label: Some(label.clone()),
-                    description: Some("文節修正".to_string()),
-                });
+        for variant in zu_du_reading_variants(reading) {
+            for (entry, _score) in
+                cache.lookup(&variant, left_hint.as_deref(), right_hint.as_deref())
+            {
+                if candidates.len() >= MAX_LEARNING_CANDIDATES {
+                    break;
+                }
+                if seen.insert(entry.surface.clone()) {
+                    let description = if variant == reading {
+                        Some("文節修正".to_string())
+                    } else {
+                        correction_description(Some("文節修正".to_string()), &variant)
+                    };
+                    candidates.push(Candidate {
+                        text: entry.surface,
+                        reading: Some(reading.to_string()),
+                        source_label: Some(label.clone()),
+                        description,
+                    });
+                }
             }
         }
 
@@ -997,13 +1058,16 @@ impl InputMethodEngine {
     /// Live conversion uses this separately from the combined dictionary lookup so
     /// a system-dictionary hit does not unexpectedly replace the model output.
     pub(super) fn lookup_user_dict_live_surface(&self, reading: &str) -> Option<String> {
-        self.dicts
-            .user
-            .as_ref()?
-            .exact_match_search(reading)?
-            .candidates
-            .first()
-            .map(|candidate| candidate.surface.clone())
+        let dictionary = self.dicts.user.as_ref()?;
+        zu_du_reading_variants(reading)
+            .into_iter()
+            .find_map(|variant| {
+                dictionary
+                    .exact_match_search(&variant)?
+                    .candidates
+                    .first()
+                    .map(|candidate| candidate.surface.clone())
+            })
     }
 
     /// Build rule-based rewriter variants for the reading itself (e.g. for

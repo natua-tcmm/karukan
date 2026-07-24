@@ -13,6 +13,7 @@ mod input;
 mod input_buffer;
 mod long_conversion;
 mod morphology;
+mod reading_correction;
 mod types;
 
 pub use types::*;

@@ -9,6 +9,7 @@ use std::time::Instant;
 use super::ComposingChunk;
 use super::chunk::{ChunkPlan, assemble_chunk_candidates, group_chunks, is_japanese};
 use super::morphology::model_candidate_preserves_reading;
+use super::reading_correction::{interleave_model_candidates, zu_du_reading_variants};
 use karukan_engine::{KanaKanjiConverter, ModelCandidate};
 
 #[derive(Debug, Clone)]
@@ -188,13 +189,27 @@ enum WorkerJob {
     Live(LiveInferenceRequest),
 }
 
-fn validated_live_candidate_texts(reading: &str, candidates: Vec<ModelCandidate>) -> Vec<String> {
-    let mut values: Vec<String> = candidates
+fn live_candidate_texts(
+    converter: &KanaKanjiConverter,
+    reading: &str,
+    context: &str,
+    num_candidates: usize,
+) -> Vec<String> {
+    let groups = zu_du_reading_variants(reading)
         .into_iter()
-        .filter(|candidate| model_candidate_preserves_reading(&candidate.text, reading))
+        .map(|variant| {
+            converter
+                .convert_scored(&variant, context, num_candidates)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|candidate| model_candidate_preserves_reading(&candidate.text, &variant))
+                .collect()
+        })
+        .collect();
+    let mut values: Vec<String> = interleave_model_candidates(groups, num_candidates)
+        .into_iter()
         .map(|candidate| candidate.text)
         .collect();
-    values.dedup();
     if values.is_empty() {
         values.push(reading.to_string());
     }
@@ -227,12 +242,7 @@ fn convert_live(
                 &format!("{}{}", request.base_context, combined),
                 request.max_context_len,
             );
-            validated_live_candidate_texts(
-                &reading,
-                converter
-                    .convert_scored(&reading, &context, request.num_candidates.max(1))
-                    .unwrap_or_default(),
-            )
+            live_candidate_texts(converter, &reading, &context, request.num_candidates.max(1))
         } else {
             vec![reading.clone()]
         };
@@ -296,7 +306,7 @@ mod tests {
 
     #[test]
     fn invalid_top_kana_rewrite_is_removed_from_live_candidates() {
-        let candidates = validated_live_candidate_texts(
+        let candidates = validated_live_candidate_texts_for_test(
             "だけど",
             vec![
                 model_candidate("だし"),
@@ -310,11 +320,31 @@ mod tests {
 
     #[test]
     fn raw_reading_is_used_when_every_live_model_candidate_is_invalid() {
-        let candidates = validated_live_candidate_texts(
+        let candidates = validated_live_candidate_texts_for_test(
             "だけど",
             vec![model_candidate("だし"), model_candidate("なので")],
         );
 
         assert_eq!(candidates, ["だけど"]);
+    }
+
+    fn validated_live_candidate_texts_for_test(
+        reading: &str,
+        candidates: Vec<ModelCandidate>,
+    ) -> Vec<String> {
+        let groups = vec![
+            candidates
+                .into_iter()
+                .filter(|candidate| model_candidate_preserves_reading(&candidate.text, reading))
+                .collect(),
+        ];
+        let mut values: Vec<String> = interleave_model_candidates(groups, usize::MAX)
+            .into_iter()
+            .map(|candidate| candidate.text)
+            .collect();
+        if values.is_empty() {
+            values.push(reading.to_string());
+        }
+        values
     }
 }
