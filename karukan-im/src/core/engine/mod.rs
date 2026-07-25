@@ -24,7 +24,8 @@ use input_buffer::InputBuffer;
 mod tests;
 
 use karukan_engine::{
-    Dictionary, KanaKanjiConverter, RewriterChain, RomajiConverter, SegmentLearningCache,
+    Dictionary, EmojiRewriter, KanaKanjiConverter, Rewriter, RewriterChain, RomajiConverter,
+    SegmentLearningCache,
 };
 use tracing::{debug, trace};
 
@@ -36,6 +37,9 @@ use crate::config::settings::Settings;
 
 /// Whole-reading alternatives shown before bunsetsu correction takes over.
 const WHOLE_CANDIDATE_LIMIT: usize = 3;
+
+/// Emoji mode deliberately shows one complete candidate page.
+const EMOJI_CANDIDATE_LIMIT: usize = CandidateList::DEFAULT_PAGE_SIZE;
 
 /// Source of a conversion candidate
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -572,7 +576,15 @@ impl InputMethodEngine {
                 // Flush romaji buffer into composed_hiragana
                 self.flush_romaji_to_composed();
                 let reading = self.input_buf.text.clone();
-                let text = if !self.live.text.is_empty() {
+                let text = if self.input_mode == InputMode::Emoji {
+                    self.composing_candidates
+                        .as_ref()
+                        .filter(|_| self.composing_candidate_selected)
+                        .and_then(CandidateList::selected_text)
+                        .map(str::to_string)
+                        .or_else(|| self.first_emoji_candidate(&reading))
+                        .unwrap_or_else(|| reading.clone())
+                } else if !self.live.text.is_empty() {
                     self.live.text.clone()
                 } else {
                     reading.clone()
@@ -584,6 +596,7 @@ impl InputMethodEngine {
                 self.clear_composing_candidates();
                 self.state = InputState::Empty;
                 self.surrounding_context = None;
+                self.exit_emoji_mode();
                 text
             }
             InputState::Conversion { session } => {
@@ -593,6 +606,7 @@ impl InputMethodEngine {
                 self.clear_composing_candidates();
                 self.state = InputState::Empty;
                 self.surrounding_context = None;
+                self.exit_emoji_mode();
                 text
             }
         }

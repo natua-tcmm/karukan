@@ -40,6 +40,30 @@ fn typing_colon_in_empty_enters_emoji_mode() {
 }
 
 #[test]
+fn shifted_semicolon_keysym_also_enters_emoji_mode() {
+    let mut engine = InputMethodEngine::new();
+    let result = engine.process_key(&press_shift(';'));
+
+    assert!(result.consumed);
+    assert_eq!(engine.input_mode, InputMode::Emoji);
+    assert_eq!(engine.preedit().unwrap().text(), ":");
+    assert_eq!(auto_suggest_texts(&result).len(), 9);
+}
+
+#[test]
+fn typing_colon_immediately_shows_nine_default_candidates() {
+    let mut engine = InputMethodEngine::new();
+    let result = engine.process_key(&press_colon());
+    let texts = auto_suggest_texts(&result);
+
+    assert_eq!(texts.len(), 9);
+    assert_eq!(
+        texts,
+        vec!["😀", "😄", "😂", "😊", "🥺", "😍", "👍", "🙏", "❤️"]
+    );
+}
+
+#[test]
 fn ascii_after_colon_stays_literal() {
     // Confirms the user's spec: `:pien` must remain `:pien`, not get
     // romaji-converted into hiragana while the user is still typing.
@@ -135,13 +159,9 @@ fn enter_on_emoji_query_commits_emoji_not_literal() {
 }
 
 #[test]
-fn conversion_emoji_first_not_literal() {
-    // After Space in emoji mode, the conversion candidate list should
-    // surface 😄 ahead of the literal `:smile`. Previously the
-    // hiragana/katakana fallback (the literal `:smile` text) sat above
-    // rewriter candidates and `:smile` became the default selection —
-    // exactly the noise the user wants suppressed for an explicit
-    // emoji-mode session.
+fn space_selects_first_emoji_without_entering_conversion() {
+    // Emoji selection stays in its dedicated composing mode. It must not
+    // transition to ordinary whole/segmented kana-kanji conversion.
     let mut engine = InputMethodEngine::new();
     engine.process_key(&press_colon());
     for ch in ['s', 'm', 'i', 'l', 'e'] {
@@ -149,22 +169,7 @@ fn conversion_emoji_first_not_literal() {
     }
     let result = engine.process_key(&press_key(Keysym::SPACE));
 
-    // Selected text on entering Conversion comes from the first
-    // candidate; assert it's the emoji, not the literal.
-    let candidates = engine
-        .candidates()
-        .expect("expected Conversion candidate list");
-    let first = candidates
-        .candidates()
-        .first()
-        .expect("expected at least one candidate")
-        .text
-        .as_str();
-    assert_eq!(first, "😄", "expected 😄 as first candidate, got {}", first);
-
-    // The conversion preedit (sent via UpdatePreedit) should also be
-    // the emoji, not `:smile`, since the first candidate is selected
-    // by default on entering Conversion.
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
     use crate::core::engine::EngineAction;
     let preedit_text = result
         .actions
@@ -178,7 +183,7 @@ fn conversion_emoji_first_not_literal() {
 }
 
 #[test]
-fn conversion_unknown_emoji_shows_no_literal() {
+fn unknown_emoji_query_shows_no_literal() {
     // Slack-style mental model: the emoji picker shows emojis or
     // nothing — never the literal `:qqqq` query. When the user's
     // input doesn't match any emoji, the candidate list must NOT
@@ -190,16 +195,39 @@ fn conversion_unknown_emoji_shows_no_literal() {
     for ch in ['q', 'q', 'q', 'q'] {
         engine.process_key(&press(ch));
     }
-    engine.process_key(&press_key(Keysym::SPACE));
-    let texts: Vec<String> = engine
-        .candidates()
-        .map(|list| list.candidates().iter().map(|c| c.text.clone()).collect())
-        .unwrap_or_default();
+    let result = engine.process_key(&press_key(Keysym::SPACE));
+    let texts = auto_suggest_texts(&result);
     assert!(
         !texts.iter().any(|t| t == ":qqqq"),
         "did NOT expect :qqqq literal in emoji-mode candidates, got {:?}",
         texts
     );
+}
+
+#[test]
+fn clicking_emoji_candidate_selects_it_inside_emoji_mode() {
+    let mut engine = InputMethodEngine::new();
+    engine.process_key(&press_colon());
+
+    let selected = engine.select_candidate_on_page(2);
+    assert!(selected.consumed);
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), "😂");
+
+    let committed = engine.process_key(&press_key(Keysym::RETURN));
+    assert_eq!(commit_text(&committed).as_deref(), Some("😂"));
+    assert_eq!(engine.input_mode, InputMode::Hiragana);
+}
+
+#[test]
+fn explicit_commit_api_commits_selected_emoji() {
+    let mut engine = InputMethodEngine::new();
+    engine.process_key(&press_colon());
+    engine.select_candidate_on_page(2);
+
+    assert_eq!(engine.commit(), "😂");
+    assert!(matches!(engine.state(), InputState::Empty));
+    assert_eq!(engine.input_mode, InputMode::Hiragana);
 }
 
 #[test]

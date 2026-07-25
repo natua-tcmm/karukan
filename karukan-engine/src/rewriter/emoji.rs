@@ -64,6 +64,10 @@ const EMOJI_LABEL: &str = "絵文字";
 /// consults the trigger table when the input begins with this char.
 const TRIGGER_PREFIX: char = ':';
 
+/// Candidates shown before the user has entered a query. Keep this list short
+/// enough to fill exactly one IME candidate page.
+const DEFAULT_EMOJIS: [&str; 9] = ["😀", "😄", "😂", "😊", "🥺", "😍", "👍", "🙏", "❤️"];
+
 #[derive(Deserialize)]
 struct EmojiEntry {
     char: String,
@@ -224,13 +228,17 @@ impl Rewriter for EmojiRewriter {
 
         // Path 1: Slack-style `:trigger` lookup. Score each trigger
         // with peco's fuzzy heuristic (see `best_match_score`), sort
-        // ascending, cap at MAX_TRIGGER_CANDIDATES to keep short
-        // queries (`:s`) from dumping thousands of hits. Equal-score
-        // ties keep emoji.yml's source order (manual alias → CLDR →
-        // romaji), which already favors idiomatic triggers.
-        if let Some(stripped) = candidate.strip_prefix(TRIGGER_PREFIX)
-            && !stripped.is_empty()
-        {
+        // ascending. The caller decides how many ranked results to display.
+        // Equal-score ties keep emoji.yml's source order (manual alias →
+        // CLDR → romaji), which already favors idiomatic triggers.
+        if let Some(stripped) = candidate.strip_prefix(TRIGGER_PREFIX) {
+            if stripped.is_empty() {
+                for emoji in DEFAULT_EMOJIS {
+                    push_with_desc(emoji, format_description(emoji), &mut out);
+                }
+                return out;
+            }
+
             let query = stripped.as_bytes();
             let mut scored: Vec<(MatchScore, &str, &str)> = Vec::new();
             for (trig, emoji) in &EMOJI_TABLE.triggers {
@@ -421,8 +429,13 @@ mod tests {
     }
 
     #[test]
-    fn colon_alone_returns_empty() {
-        assert!(rewriter().rewrite(":").is_empty());
+    fn colon_alone_returns_default_page() {
+        let out = texts(&rewriter().rewrite(":"));
+        assert_eq!(out.len(), 9);
+        assert_eq!(
+            out,
+            vec!["😀", "😄", "😂", "😊", "🥺", "😍", "👍", "🙏", "❤️"]
+        );
     }
 
     #[test]

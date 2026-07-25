@@ -135,12 +135,10 @@ pub(crate) enum InputMode {
     /// Alphabet (direct input) mode — characters bypass romaji conversion
     Alphabet,
     /// Emoji shortcode mode — entered by typing `:` from Empty state.
-    /// Behaves like [`InputMode::Alphabet`] (ASCII inserted directly,
-    /// no romaji conversion) but auto-exits back to [`InputMode::Hiragana`]
-    /// on commit/cancel so the next word lands in kana mode without the
-    /// user having to toggle anything. The `EmojiRewriter` picks up the
-    /// `:`-prefixed input from the candidate-build pipeline and surfaces
-    /// emoji candidates as the user types.
+    /// ASCII is inserted directly without romaji conversion. Candidate
+    /// generation uses only `EmojiRewriter`, bypassing live conversion,
+    /// dictionaries, learning, and segmented conversion. The mode restores
+    /// the preceding input mode after commit or after the query is erased.
     Emoji,
 }
 

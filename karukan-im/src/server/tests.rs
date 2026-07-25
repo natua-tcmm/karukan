@@ -12,6 +12,7 @@ const XKB_KEY_A: u32 = Keysym::KEY_A.0;
 const XKB_KEY_RETURN: u32 = Keysym::RETURN.0;
 const XKB_KEY_ESCAPE: u32 = Keysym::ESCAPE.0;
 const XKB_KEY_SPACE: u32 = Keysym::SPACE.0;
+const XKB_KEY_COLON: u32 = b':' as u32;
 
 fn test_server() -> ImServer {
     let mut settings = Settings::default();
@@ -117,6 +118,30 @@ fn test_typing_and_commit() {
     let resp = press(&mut server, XKB_KEY_RETURN);
     let commits = actions_of(&resp, "commit");
     assert_eq!(commits.last().unwrap()["text"], "か");
+}
+
+#[test]
+fn test_colon_opens_nine_candidate_emoji_mode() {
+    let mut server = test_server();
+
+    let resp = press(&mut server, XKB_KEY_COLON);
+    assert_eq!(resp["result"]["consumed"], true);
+    let shows = actions_of(&resp, "show_candidates");
+    let candidates = shows.last().unwrap()["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 9);
+    assert_eq!(candidates[0]["text"], "😀");
+
+    let resp = request(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":30,"method":"select_candidate","params":{"page_index":2}}),
+    );
+    assert_eq!(resp["result"]["consumed"], true);
+    let preedits = actions_of(&resp, "update_preedit");
+    assert_eq!(preedits.last().unwrap()["text"], "😂");
+
+    let resp = press(&mut server, XKB_KEY_RETURN);
+    let commits = actions_of(&resp, "commit");
+    assert_eq!(commits.last().unwrap()["text"], "😂");
 }
 
 #[test]

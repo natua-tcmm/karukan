@@ -54,6 +54,42 @@ fn limit_whole_candidates(candidates: &mut Vec<Candidate>) {
 }
 
 impl InputMethodEngine {
+    /// Refresh the dedicated emoji picker without invoking live conversion,
+    /// learning, dictionaries, or the general rewriter chain.
+    fn refresh_emoji_state(&mut self) -> EngineResult {
+        self.live.clear();
+        self.chunks.clear();
+
+        let reading = self.input_buf.text.clone();
+        let preedit = self.set_composing_state();
+        let source_label = CandidateSource::Rewriter.label().to_string();
+        let candidates: Vec<Candidate> = EmojiRewriter::new()
+            .rewrite(&reading)
+            .into_iter()
+            .take(EMOJI_CANDIDATE_LIMIT)
+            .map(|(text, description)| Candidate {
+                text,
+                reading: Some(reading.clone()),
+                source_label: Some(source_label.clone()),
+                description,
+            })
+            .collect();
+
+        if candidates.is_empty() {
+            self.clear_composing_candidates();
+            return EngineResult::consumed()
+                .with_action(EngineAction::UpdatePreedit(preedit))
+                .with_action(EngineAction::HideCandidates)
+                .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
+        }
+
+        let candidates = self.set_composing_candidates(CandidateList::new(candidates));
+        EngineResult::consumed()
+            .with_action(EngineAction::UpdatePreedit(preedit))
+            .with_action(EngineAction::ShowCandidates(candidates))
+            .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()))
+    }
+
     /// Pick the visible live-conversion surface.
     ///
     /// A single hiragana remains raw by design. For longer readings, an exact
@@ -68,6 +104,10 @@ impl InputMethodEngine {
 
     /// Refresh the input state: rebuild preedit and run auto-suggest for candidates.
     pub(super) fn refresh_input_state(&mut self) -> EngineResult {
+        if self.input_mode == InputMode::Emoji {
+            return self.refresh_emoji_state();
+        }
+
         // Alphabet mode with active live conversion but no kana left to convert:
         // preserve the existing conversion display without re-running the model.
         // (When the buffer still contains kana we fall through and reconvert below,
@@ -388,9 +428,9 @@ impl InputMethodEngine {
 
         // `:` from Empty state enters emoji shortcode mode — `:pien` stays
         // as `:pien` literally (no romaji conversion) while emoji candidates
-        // are surfaced via the rewriter. The mode auto-exits back to Hiragana
-        // on Escape or commit, so the user's next word lands in kana mode
-        // again without an explicit toggle.
+        // are surfaced by the dedicated emoji picker. The mode auto-exits
+        // after commit or after the query is erased, so the user's next word
+        // lands in the previous input mode without an explicit toggle.
         //
         // Two keysym shapes can produce `:` depending on how the frontend
         // resolves the layout: (a) the XKB `colon` keysym (0x003A)
@@ -522,6 +562,9 @@ impl InputMethodEngine {
             Keysym::F8 => self.commit_composing_as(ComposingCommitForm::HalfKatakana),
             Keysym::F9 | Keysym::F10 => EngineResult::consumed(),
             Keysym::SPACE if self.input_mode == InputMode::Alphabet => self.input_char(' '),
+            Keysym::SPACE if self.input_mode == InputMode::Emoji => {
+                self.select_next_composing_candidate()
+            }
             Keysym::TAB | Keysym::DOWN => self.select_next_composing_candidate(),
             Keysym::UP => self.select_prev_composing_candidate(),
             Keysym::SPACE if self.composing_candidate_selected => {
@@ -605,7 +648,7 @@ impl InputMethodEngine {
     /// First emoji candidate the rewriter would surface for `reading`,
     /// or `None` if none match. Used by Enter in emoji mode so committing
     /// `:smile` produces 😄 directly rather than the literal `:smile`.
-    fn first_emoji_candidate(&self, reading: &str) -> Option<String> {
+    pub(super) fn first_emoji_candidate(&self, reading: &str) -> Option<String> {
         self.converters
             .rewriters
             .rewrite_all(&[reading.to_string()])
@@ -667,7 +710,7 @@ impl InputMethodEngine {
         }
         self.invalidate_live_results();
         if self.composing_candidate_selected {
-            if candidates.cursor() + 1 >= candidates.len() {
+            if candidates.cursor() + 1 >= candidates.len() && self.input_mode != InputMode::Emoji {
                 return self.start_segmented_conversion_from_composing();
             }
             candidates.move_next();
@@ -693,7 +736,10 @@ impl InputMethodEngine {
         self.update_composing_candidate_selection(candidates)
     }
 
-    fn update_composing_candidate_selection(&mut self, candidates: CandidateList) -> EngineResult {
+    pub(super) fn update_composing_candidate_selection(
+        &mut self,
+        candidates: CandidateList,
+    ) -> EngineResult {
         let selected_text = candidates.selected_text().unwrap_or("").to_string();
         self.composing_candidates = Some(candidates.clone());
 
@@ -719,6 +765,23 @@ impl InputMethodEngine {
             .with_action(EngineAction::UpdateAuxText(
                 self.format_aux_conversion_with_page(&reading, self.composing_candidates.as_ref()),
             ))
+    }
+
+    /// Apply a clicked candidate while remaining in the dedicated emoji mode.
+    pub(super) fn select_emoji_candidate_on_page(&mut self, page_index: usize) -> EngineResult {
+        if self.input_mode != InputMode::Emoji
+            || !matches!(self.state, InputState::Composing { .. })
+        {
+            return EngineResult::not_consumed();
+        }
+        let Some(mut candidates) = self.composing_candidates.clone() else {
+            return EngineResult::not_consumed();
+        };
+        if candidates.select_on_page(page_index + 1).is_none() {
+            return EngineResult::consumed();
+        }
+        self.composing_candidate_selected = true;
+        self.update_composing_candidate_selection(candidates)
     }
 
     fn commit_selected_composing_candidate(&mut self) -> Option<EngineResult> {

@@ -1675,7 +1675,11 @@ impl InputMethodEngine {
     pub fn select_candidate_on_page(&mut self, page_index: usize) -> EngineResult {
         let start = std::time::Instant::now();
         self.metrics.conversion_ms = 0;
-        let result = self.select_candidate_by_digit(page_index + 1);
+        let result = if self.input_mode == InputMode::Emoji {
+            self.select_emoji_candidate_on_page(page_index)
+        } else {
+            self.select_candidate_by_digit(page_index + 1)
+        };
         self.metrics.process_key_ms = start.elapsed().as_millis() as u64;
         result
     }
