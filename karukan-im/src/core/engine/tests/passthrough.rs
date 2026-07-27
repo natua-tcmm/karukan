@@ -96,6 +96,18 @@ fn test_passthrough_after_hiragana_no_double() {
 }
 
 #[test]
+fn repeated_w_stays_literal_in_preedit() {
+    let mut engine = InputMethodEngine::new();
+
+    engine.process_key(&press('w'));
+    engine.process_key(&press('w'));
+    assert_eq!(engine.preedit().unwrap().text(), "ww");
+
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "wわ");
+}
+
+#[test]
 fn test_digit_starts_input_mode() {
     // Typing a digit from Empty state should enter Composing,
     // not commit immediately. This allows typing "20世紀" etc.

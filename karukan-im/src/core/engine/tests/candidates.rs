@@ -93,7 +93,7 @@ fn single_hiragana_is_live_text_and_first_candidate_before_model_alternatives() 
 }
 
 #[test]
-fn short_live_conversion_has_hiragana_as_candidate_four() {
+fn short_live_conversion_has_hiragana_as_candidate_two() {
     let mut engine = make_live_conversion_engine();
     learn(&mut engine, "しよう", "私用");
     engine.input_buf.text = "しよう".to_string();
@@ -115,13 +115,13 @@ fn short_live_conversion_has_hiragana_as_candidate_four() {
     assert_eq!(candidates.first().map(String::as_str), Some("使用"));
     assert_eq!(candidates.len(), SHORT_LIVE_CANDIDATE_LIMIT);
     assert_eq!(
-        candidates.get(3).map(String::as_str),
+        candidates.get(1).map(String::as_str),
         Some("しよう"),
-        "short live conversion must reserve candidate 4 for hiragana"
+        "short live conversion must reserve candidate 2 for hiragana"
     );
     assert!(candidates.iter().any(|candidate| candidate == "私用"));
     assert_eq!(
-        engine.composing_candidates.as_ref().unwrap().candidates()[3]
+        engine.composing_candidates.as_ref().unwrap().candidates()[1]
             .description
             .as_deref(),
         Some("[全]ひらがな")
@@ -129,7 +129,7 @@ fn short_live_conversion_has_hiragana_as_candidate_four() {
 }
 
 #[test]
-fn five_character_live_conversion_has_hiragana_as_candidate_four() {
+fn five_character_live_conversion_has_hiragana_as_candidate_two() {
     let mut engine = make_live_conversion_engine();
     engine.input_buf.text = "あいうえお".to_string();
     engine.input_buf.cursor_pos = 5;
@@ -151,11 +151,11 @@ fn five_character_live_conversion_has_hiragana_as_candidate_four() {
     let candidates = shown_candidate_texts(&result);
 
     assert_eq!(candidates.len(), SHORT_LIVE_CANDIDATE_LIMIT);
-    assert_eq!(candidates.get(3).map(String::as_str), Some("あいうえお"));
+    assert_eq!(candidates.get(1).map(String::as_str), Some("あいうえお"));
 }
 
 #[test]
-fn six_character_live_conversion_keeps_three_whole_candidates() {
+fn six_character_live_conversion_has_hiragana_as_candidate_two() {
     let mut engine = make_live_conversion_engine();
     engine.input_buf.text = "あいうえおか".to_string();
     engine.input_buf.cursor_pos = 6;
@@ -176,12 +176,152 @@ fn six_character_live_conversion_keeps_three_whole_candidates() {
     let result = engine.refresh_input_state();
     let candidates = shown_candidate_texts(&result);
 
+    assert_eq!(candidates.len(), SHORT_LIVE_CANDIDATE_LIMIT);
+    assert_eq!(candidates.get(1).map(String::as_str), Some("あいうえおか"));
+}
+
+#[test]
+fn seven_character_live_conversion_keeps_three_whole_candidates() {
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = "あいうえおかき".to_string();
+    engine.input_buf.cursor_pos = 7;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("あいうえおかき"),
+        romaji_buffer: String::new(),
+    };
+    engine.chunks = vec![ComposingChunk {
+        reading: "あいうえおかき".to_string(),
+        converted: "相上尾下記".to_string(),
+        candidates: vec![
+            "相上尾下記".to_string(),
+            "藍植尾夏季".to_string(),
+            "愛上緒花器".to_string(),
+        ],
+    }];
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
     assert_eq!(candidates.len(), WHOLE_CANDIDATE_LIMIT);
     assert!(
         !candidates
             .iter()
-            .any(|candidate| candidate == "あいうえおか")
+            .any(|candidate| candidate == "あいうえおかき")
     );
+}
+
+#[test]
+fn short_live_conversion_removes_katakana_only_and_mixed_kana_candidates() {
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = "しよう".to_string();
+    engine.input_buf.cursor_pos = 3;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("しよう"),
+        romaji_buffer: String::new(),
+    };
+    engine.chunks = vec![ComposingChunk {
+        reading: "しよう".to_string(),
+        converted: "使用".to_string(),
+        candidates: vec![
+            "使用".to_string(),
+            "シヨウ".to_string(),
+            "しヨう".to_string(),
+            "仕様".to_string(),
+            "私用".to_string(),
+            "ｼﾖｳ".to_string(),
+        ],
+    }];
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(candidates, ["使用", "しよう", "仕様", "私用"]);
+}
+
+#[test]
+fn filtered_live_surface_matches_candidate_one_and_space_reuses_the_list() {
+    let reading = "して";
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = reading.to_string();
+    engine.input_buf.cursor_pos = reading.chars().count();
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text(reading),
+        romaji_buffer: String::new(),
+    };
+
+    let result = engine.apply_background_candidates(
+        reading.to_string(),
+        reading.to_string(),
+        vec![
+            "シて".to_string(),
+            "仕手".to_string(),
+            "し手".to_string(),
+            "為手".to_string(),
+        ],
+    );
+    let before = shown_candidate_texts(&result);
+
+    assert_eq!(before, ["仕手", "して", "し手", "為手"]);
+    assert_eq!(engine.live.text, "仕手");
+    assert_eq!(engine.preedit().map(Preedit::text), Some("仕手"));
+
+    engine.process_key(&press_key(Keysym::SPACE));
+    let after = engine.state().candidates().unwrap();
+
+    assert_eq!(candidate_texts(after), before);
+    assert_eq!(after.cursor(), 1);
+    assert_eq!(after.selected_text(), Some("して"));
+}
+
+#[test]
+fn filtered_background_prefix_keeps_newer_suffix_pending() {
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = "している".to_string();
+    engine.input_buf.cursor_pos = 4;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("している"),
+        romaji_buffer: String::new(),
+    };
+
+    engine.apply_background_candidates(
+        "して".to_string(),
+        "している".to_string(),
+        vec!["シて".to_string(), "仕手".to_string(), "し手".to_string()],
+    );
+
+    assert_eq!(engine.live.applied_reading, "して");
+    assert_eq!(engine.live.applied_text, "仕手");
+    assert_eq!(engine.live.text, "仕手いる");
+    assert_eq!(engine.preedit().map(Preedit::text), Some("仕手いる"));
+}
+
+#[test]
+fn punctuation_does_not_disable_single_hiragana_priority() {
+    for reading in ["し、", "し。", "し〜", "し～"] {
+        let suffix: String = reading.chars().skip(1).collect();
+        let kanji_candidate = format!("詩{suffix}");
+        let katakana_candidate = karukan_engine::hiragana_to_katakana(reading);
+        let mut engine = make_live_conversion_engine();
+        engine.input_buf.text = reading.to_string();
+        engine.input_buf.cursor_pos = reading.chars().count();
+        engine.state = InputState::Composing {
+            preedit: Preedit::with_text(reading),
+            romaji_buffer: String::new(),
+        };
+        engine.chunks = vec![ComposingChunk {
+            reading: reading.to_string(),
+            converted: kanji_candidate.clone(),
+            candidates: vec![kanji_candidate, katakana_candidate.clone()],
+        }];
+
+        let result = engine.refresh_input_state();
+        let candidates = shown_candidate_texts(&result);
+
+        assert_eq!(engine.live.text, reading);
+        assert_eq!(engine.preedit().unwrap().text(), reading);
+        assert_eq!(candidates.first().map(String::as_str), Some(reading));
+        assert!(!candidates.contains(&katakana_candidate));
+    }
 }
 
 #[test]
@@ -320,13 +460,11 @@ fn space_skips_the_live_first_candidate_and_starts_from_the_second() {
         engine.preedit().map(Preedit::text),
         candidates.selected_text()
     );
-    assert_eq!(candidates.len(), SHORT_LIVE_CANDIDATE_LIMIT);
-    assert_eq!(
+    assert!(
         candidates
             .candidates()
-            .get(3)
-            .map(|candidate| candidate.text.as_str()),
-        Some("あい")
+            .iter()
+            .any(|candidate| candidate.text == "あい")
     );
 }
 

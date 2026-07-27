@@ -98,6 +98,37 @@ impl InputMethodEngine {
             .or_else(|| model_surface.map(str::to_string))
     }
 
+    /// Keep the visible live surface identical to candidate 1 after candidate
+    /// filtering and ranking have finished. In particular, a kana-only mixed
+    /// surface such as `シて` may have been chosen from the raw model beam and
+    /// then removed by `finalize_whole_candidates`; leaving it in `live.text`
+    /// would make Space reject the displayed list as stale and regenerate it.
+    fn sync_live_surface_to_first_candidate(
+        &mut self,
+        reading: &str,
+        applied_reading: &str,
+        candidates: &[Candidate],
+    ) {
+        if self.live.text.is_empty() {
+            return;
+        }
+        let Some(surface) = candidates.first().map(|candidate| candidate.text.as_str()) else {
+            return;
+        };
+        if self.live.text == surface {
+            return;
+        }
+
+        let (applied_reading, applied_surface) = reading
+            .strip_prefix(applied_reading)
+            .and_then(|suffix| surface.strip_suffix(suffix))
+            .map(|surface_prefix| (applied_reading, surface_prefix))
+            .unwrap_or((reading, surface));
+        self.live
+            .set_applied_prefix(applied_reading.to_string(), applied_surface.to_string());
+        self.live.rebuild_for_reading(reading);
+    }
+
     /// Refresh the input state: rebuild preedit and run auto-suggest for candidates.
     pub(super) fn refresh_input_state(&mut self) -> EngineResult {
         if self.input_mode == InputMode::Emoji {
@@ -153,7 +184,6 @@ impl InputMethodEngine {
             } else {
                 self.live.clear();
             }
-            let preedit = self.set_composing_state();
             let mut all_candidates = self.lookup_learning_candidates(&reading);
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
             append_candidates_dedup(&mut all_candidates, self.lookup_rewriter_variants(&reading));
@@ -173,12 +203,15 @@ impl InputMethodEngine {
                 &mut all_candidates,
             );
             if all_candidates.is_empty() {
+                let preedit = self.set_composing_state();
                 self.clear_composing_candidates();
                 return EngineResult::consumed()
                     .with_action(EngineAction::UpdatePreedit(preedit))
                     .with_action(EngineAction::HideCandidates)
                     .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
             }
+            self.sync_live_surface_to_first_candidate(&reading, &reading, &all_candidates);
+            let preedit = self.set_composing_state();
             let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
             self.mark_composing_candidates_model_ready();
             return EngineResult::consumed()
@@ -192,7 +225,6 @@ impl InputMethodEngine {
             self.live.text = self
                 .preferred_live_surface(&reading, candidates.first().map(String::as_str))
                 .unwrap_or_default();
-            let preedit = self.set_composing_state();
 
             // Same candidate ordering as normal auto-suggest (learning → model →
             // dictionary). Including the model candidates guarantees the list is
@@ -219,6 +251,8 @@ impl InputMethodEngine {
                 &reading,
                 &mut all_candidates,
             );
+            self.sync_live_surface_to_first_candidate(&reading, &reading, &all_candidates);
+            let preedit = self.set_composing_state();
             let aux = self.format_aux_suggest(&self.input_buf.text.clone());
             let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
             self.mark_composing_candidates_model_ready();
@@ -270,7 +304,6 @@ impl InputMethodEngine {
         } else if !live_active || !self.live.rebuild_for_reading(&reading) {
             self.live.clear();
         }
-        let preedit = self.set_composing_state();
         let mut candidates = self.lookup_learning_candidates(&reading);
         append_candidates_dedup(&mut candidates, self.lookup_dict_candidates(&reading));
         append_candidates_dedup(&mut candidates, self.lookup_rewriter_variants(&reading));
@@ -290,12 +323,15 @@ impl InputMethodEngine {
             &mut candidates,
         );
         if candidates.is_empty() {
+            let preedit = self.set_composing_state();
             self.clear_composing_candidates();
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(preedit))
                 .with_action(EngineAction::HideCandidates)
                 .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
         }
+        self.sync_live_surface_to_first_candidate(&reading, &reading, &candidates);
+        let preedit = self.set_composing_state();
         let candidate_list = self.set_composing_candidates(CandidateList::new(candidates));
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
@@ -305,6 +341,12 @@ impl InputMethodEngine {
 
     fn submit_live_inference(&mut self) {
         self.live_revision = self.live_revision.wrapping_add(1);
+        let num_candidates = live_candidate_pool_limit(
+            self.live.enabled,
+            self.input_mode,
+            &self.input_buf.text,
+            self.config.live_num_candidates,
+        );
         let request = super::async_live::LiveInferenceRequest {
             revision: self.live_revision,
             reading: self.input_buf.text.clone(),
@@ -312,7 +354,7 @@ impl InputMethodEngine {
             base_context: self.truncate_context_for_api(),
             max_context_len: self.config.max_api_context_len,
             chunk_len: self.config.composing_chunk_len,
-            num_candidates: self.config.live_num_candidates.max(1),
+            num_candidates,
             old_chunks: self.chunks.clone(),
         };
         if let Some(worker) = self.converters.kanji.as_ref() {
@@ -382,7 +424,6 @@ impl InputMethodEngine {
         } else {
             self.live.clear();
         }
-        let preedit = self.set_composing_state();
         let mut all_candidates = self.lookup_learning_candidates(&current_reading);
         let whole_candidates = prefix_candidates
             .into_iter()
@@ -412,6 +453,12 @@ impl InputMethodEngine {
             &current_reading,
             &mut all_candidates,
         );
+        self.sync_live_surface_to_first_candidate(
+            &current_reading,
+            &result_reading,
+            &all_candidates,
+        );
+        let preedit = self.set_composing_state();
         let candidates = self.set_composing_candidates(CandidateList::new(all_candidates));
         if result_reading == current_reading {
             self.mark_composing_candidates_model_ready();

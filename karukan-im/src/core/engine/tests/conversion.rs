@@ -227,7 +227,7 @@ fn exhausting_one_token_composing_candidates_enters_segmented_conversion() {
 }
 
 #[test]
-fn short_live_conversion_enters_segmented_mode_after_hiragana_candidate_four() {
+fn short_live_conversion_enters_segmented_mode_after_four_whole_candidates() {
     let mut engine = make_live_conversion_engine();
     engine.input_buf.text = "しよう".to_string();
     engine.input_buf.cursor_pos = 3;
@@ -237,16 +237,19 @@ fn short_live_conversion_enters_segmented_mode_after_hiragana_candidate_four() {
         romaji_buffer: String::new(),
     };
     engine.composing_candidates = Some(CandidateList::from_strings_with_reading(
-        ["使用", "仕様", "私用", "しよう"],
+        ["使用", "しよう", "仕様", "私用"],
         "しよう",
     ));
     engine.composing_candidates_model_ready = true;
 
-    // Space starts at candidate 2, then advances through candidates 3 and 4.
-    engine.process_key(&press_key(Keysym::SPACE));
-    engine.process_key(&press_key(Keysym::SPACE));
+    // Space starts at candidate 2, which is the appended hiragana reading.
     engine.process_key(&press_key(Keysym::SPACE));
     assert_eq!(engine.preedit().map(Preedit::text), Some("しよう"));
+
+    // Continue through candidates 3 and 4 without entering segmented mode.
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert_eq!(engine.preedit().map(Preedit::text), Some("私用"));
     assert!(matches!(
         engine.state(),
         InputState::Conversion { session } if session.is_whole_candidate_phase()

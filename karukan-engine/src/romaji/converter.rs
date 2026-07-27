@@ -103,8 +103,10 @@ impl RomajiConverter {
                 return self.convert_with_remainder("ん".to_string());
             }
 
-            // Double consonant rule: same consonant twice (except 'n') -> っ + consonant
-            if last == second_last && !matches!(last, 'a' | 'i' | 'u' | 'e' | 'o' | 'n') {
+            // Double consonant rule: same consonant twice -> っ + consonant.
+            // `w` is excluded because repeated W is commonly intentional input
+            // (e.g. Japanese internet laughter) rather than a sokuon.
+            if last == second_last && !matches!(last, 'a' | 'i' | 'u' | 'e' | 'o' | 'n' | 'w') {
                 // Convert to sokuon and keep the last consonant
                 self.buffer = last.to_string();
                 self.output.push('っ');
@@ -297,6 +299,21 @@ mod tests {
 
         conv.push('a');
         assert_eq!(conv.output(), "っか");
+        assert_eq!(conv.buffer(), "");
+    }
+
+    #[test]
+    fn repeated_w_does_not_become_sokuon() {
+        let mut conv = RomajiConverter::new();
+        conv.push('w');
+        conv.push('w');
+
+        assert_eq!(conv.output(), "w");
+        assert_eq!(conv.buffer(), "w");
+        assert_eq!(conv.full_text(), "ww");
+
+        conv.push('a');
+        assert_eq!(conv.output(), "wわ");
         assert_eq!(conv.buffer(), "");
     }
 

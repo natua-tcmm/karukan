@@ -236,8 +236,9 @@ impl InputMethodEngine {
     /// left context is still the editor surrounding text plus the converted text
     /// of all preceding chunks, truncated to `max_api_context_len`.
     ///
-    /// Returns up to `live_num_candidates` whole-buffer conversions, or `None`
-    /// when every result equals the raw reading.
+    /// Returns a bounded pool of whole-buffer conversions, or `None` when
+    /// every result equals the raw reading. Short live conversion may request
+    /// extra internal candidates so kana-only results can be filtered later.
     ///
     /// Note: for input no longer than one chunk (the common case, default
     /// N=30) this produces exactly one model call over the whole buffer, i.e.
@@ -301,11 +302,14 @@ impl InputMethodEngine {
         );
 
         let current_chunk = self.current_chunk_index();
-        let mut candidates = assemble_chunk_candidates(
-            &self.chunks,
-            current_chunk,
-            self.config.live_num_candidates.max(1),
+        let candidate_limit = live_candidate_pool_limit(
+            self.live.enabled,
+            self.input_mode,
+            &full_reading,
+            self.config.live_num_candidates,
         );
+        let mut candidates =
+            assemble_chunk_candidates(&self.chunks, current_chunk, candidate_limit);
         candidates.retain(|candidate| candidate != &full_reading);
         (!candidates.is_empty()).then_some(candidates)
     }
@@ -384,8 +388,14 @@ impl InputMethodEngine {
     /// Model conversions of one chunk's `reading` given `lctx`, falling back
     /// to the reading itself when the model yields nothing.
     fn convert_chunk_candidates(&mut self, reading: &str, lctx: &str) -> Vec<String> {
+        let candidate_limit = live_candidate_pool_limit(
+            self.live.enabled,
+            self.input_mode,
+            &self.input_buf.text,
+            self.config.live_num_candidates,
+        );
         let mut candidates: Vec<String> = self
-            .run_kana_kanji_conversion(reading, lctx, self.config.live_num_candidates.max(1))
+            .run_kana_kanji_conversion(reading, lctx, candidate_limit)
             .into_iter()
             .map(|candidate| candidate.text)
             .collect();

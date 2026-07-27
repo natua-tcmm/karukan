@@ -325,11 +325,14 @@ impl InputMethodEngine {
                 // A pending romaji suffix may be flushed by Space, changing the
                 // reading after the composing candidates were built. Only that
                 // stale-list case regenerates explicit candidates.
-                let mut candidates = self.build_conversion_candidates(
+                let candidate_pool_limit = live_candidate_pool_limit(
+                    !prev_suggest_text.is_empty(),
+                    self.input_mode,
                     &reading,
                     WHOLE_CANDIDATE_LIMIT,
-                    skip_learning,
                 );
+                let mut candidates =
+                    self.build_conversion_candidates(&reading, candidate_pool_limit, skip_learning);
 
                 // Candidate 1 must be exactly what live conversion was displaying.
                 // Preserve source metadata when fresh inference emitted the same text.

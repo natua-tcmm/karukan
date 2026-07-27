@@ -38,19 +38,23 @@ use crate::config::settings::Settings;
 /// Whole-reading alternatives shown before bunsetsu correction takes over.
 const WHOLE_CANDIDATE_LIMIT: usize = 3;
 
-/// A short live conversion adds the raw hiragana reading after the three
+/// A short live conversion adds the raw hiragana reading to the three
 /// ordinary whole-reading alternatives.
 const SHORT_LIVE_CANDIDATE_LIMIT: usize = WHOLE_CANDIDATE_LIMIT + 1;
 
 /// Maximum reading length that receives the dedicated hiragana candidate.
-const SHORT_LIVE_READING_MAX_CHARS: usize = 5;
+const SHORT_LIVE_READING_MAX_CHARS: usize = 6;
+
+/// Internal candidate pool used to compensate for kana-only candidates that
+/// are removed before the short live-conversion list is displayed.
+const SHORT_LIVE_CANDIDATE_POOL_LIMIT: usize = 6;
 
 /// Emoji mode deliberately shows one complete candidate page.
 const EMOJI_CANDIDATE_LIMIT: usize = CandidateList::DEFAULT_PAGE_SIZE;
 
 /// Finalize the whole-reading candidates shown while composing.
 ///
-/// For a 2–5 character live conversion, candidate 4 is always the raw reading.
+/// For a 2–6 character live conversion, candidate 2 is always the raw reading.
 /// Candidate 5 therefore remains the boundary at which navigation enters
 /// segmented conversion. A one-character hiragana keeps its existing safer
 /// behavior: the raw reading stays at candidate 1.
@@ -60,53 +64,101 @@ fn finalize_whole_candidates(
     reading: &str,
     candidates: &mut Vec<Candidate>,
 ) {
-    let reading_len = reading.chars().count();
-    let add_short_hiragana = live_surface_active
+    let reading_len = conversion_character_count(reading);
+    let short_live_conversion = live_surface_active
         && input_mode == InputMode::Hiragana
-        && (2..=SHORT_LIVE_READING_MAX_CHARS).contains(&reading_len);
-    if !add_short_hiragana {
+        && (1..=SHORT_LIVE_READING_MAX_CHARS).contains(&reading_len);
+    if !short_live_conversion {
         candidates.truncate(WHOLE_CANDIDATE_LIMIT);
         return;
     }
 
-    // Remove an earlier copy first, so the raw reading occupies exactly the
-    // dedicated fourth slot instead of being duplicated among model results.
+    // For a short reading, kana-only alternatives that contain katakana are
+    // noise: remove both all-katakana and hiragana/katakana-mixed surfaces.
+    // Punctuation and symbols do not make such a surface meaningful.
+    candidates.retain(|candidate| !is_kana_only_with_katakana(&candidate.text));
+
+    // A one-letter reading remains raw at candidate 1. Punctuation such as
+    // `、` and `〜` is ignored by conversion_character_count, so `し、` and
+    // `し〜` receive the same protection as `し`.
+    if reading_len == 1 {
+        candidates.truncate(WHOLE_CANDIDATE_LIMIT);
+        return;
+    }
+
+    // Remove an earlier copy first, retain the ordinary top three, and then
+    // insert the raw reading into its dedicated second slot.
     candidates.retain(|candidate| candidate.text != reading);
 
-    // A model may return fewer than three distinct surfaces. Fill any vacant
-    // ordinary slots with useful script variants before appending hiragana.
-    let script_variants = [
-        (
-            karukan_engine::hiragana_to_katakana(reading),
-            "[全]カタカナ",
-        ),
-        (
-            karukan_engine::hiragana_to_half_katakana(reading),
-            "[半]カタカナ",
-        ),
-    ];
-    for (text, description) in script_variants {
-        if candidates.len() >= WHOLE_CANDIDATE_LIMIT {
-            break;
-        }
-        if text != reading && !candidates.iter().any(|candidate| candidate.text == text) {
-            candidates.push(Candidate {
-                text,
-                reading: Some(reading.to_string()),
-                source_label: None,
-                description: Some(description.to_string()),
-            });
+    candidates.truncate(WHOLE_CANDIDATE_LIMIT);
+    candidates.insert(
+        1.min(candidates.len()),
+        Candidate {
+            text: reading.to_string(),
+            reading: Some(reading.to_string()),
+            source_label: None,
+            description: Some("[全]ひらがな".to_string()),
+        },
+    );
+    debug_assert!(candidates.len() <= SHORT_LIVE_CANDIDATE_LIMIT);
+}
+
+fn is_hiragana_letter(ch: char) -> bool {
+    matches!(ch, '\u{3041}'..='\u{3096}')
+}
+
+fn is_katakana_letter(ch: char) -> bool {
+    matches!(ch, '\u{30A1}'..='\u{30FA}' | '\u{FF66}'..='\u{FF9F}')
+}
+
+/// Count characters that carry reading content. Punctuation, wave dashes,
+/// prolonged-sound marks, and other symbols do not increase the count.
+fn conversion_character_count(text: &str) -> usize {
+    text.chars()
+        .filter(|ch| is_hiragana_letter(*ch) || is_katakana_letter(*ch) || ch.is_alphanumeric())
+        .count()
+}
+
+fn live_candidate_pool_limit(
+    live_enabled: bool,
+    input_mode: InputMode,
+    reading: &str,
+    configured_limit: usize,
+) -> usize {
+    let configured_limit = configured_limit.max(1);
+    let reading_len = conversion_character_count(reading);
+    if live_enabled
+        && input_mode == InputMode::Hiragana
+        && (1..=SHORT_LIVE_READING_MAX_CHARS).contains(&reading_len)
+    {
+        configured_limit.max(SHORT_LIVE_CANDIDATE_POOL_LIMIT)
+    } else {
+        configured_limit
+    }
+}
+
+/// Whether all reading-bearing characters are kana and at least one of them
+/// is katakana. This covers both katakana-only and mixed hiragana/katakana
+/// candidates while ignoring punctuation around them.
+fn is_kana_only_with_katakana(text: &str) -> bool {
+    let mut has_kana = false;
+    let mut has_katakana = false;
+
+    for ch in text
+        .chars()
+        .filter(|ch| is_hiragana_letter(*ch) || is_katakana_letter(*ch) || ch.is_alphanumeric())
+    {
+        if is_hiragana_letter(ch) {
+            has_kana = true;
+        } else if is_katakana_letter(ch) {
+            has_kana = true;
+            has_katakana = true;
+        } else {
+            return false;
         }
     }
 
-    candidates.truncate(WHOLE_CANDIDATE_LIMIT);
-    candidates.push(Candidate {
-        text: reading.to_string(),
-        reading: Some(reading.to_string()),
-        source_label: None,
-        description: Some("[全]ひらがな".to_string()),
-    });
-    debug_assert!(candidates.len() <= SHORT_LIVE_CANDIDATE_LIMIT);
+    has_kana && has_katakana
 }
 
 /// Source of a conversion candidate
@@ -276,13 +328,16 @@ pub struct InputMethodEngine {
 /// Whether a raw one-character hiragana reading should outrank learned,
 /// model, and dictionary candidates.
 ///
+/// Punctuation and symbols do not count as reading characters, so a reading
+/// such as `し、` is treated like `し` rather than being converted to katakana.
+///
 /// This is intentionally limited to Hiragana mode. A one-character buffer in
 /// Katakana, Alphabet, or Emoji mode must keep that mode's normal display and
 /// candidate ordering.
 fn should_prioritize_single_hiragana(input_mode: InputMode, reading: &str) -> bool {
     input_mode == InputMode::Hiragana
-        && reading.chars().count() == 1
-        && karukan_engine::is_pure_hiragana(reading)
+        && conversion_character_count(reading) == 1
+        && reading.chars().any(is_hiragana_letter)
 }
 
 impl InputMethodEngine {
