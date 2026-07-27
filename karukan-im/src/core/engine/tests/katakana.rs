@@ -91,6 +91,37 @@ fn single_character_f6_f7_f8_commit_before_clearing_live_preedit() {
 }
 
 #[test]
+fn f6_f7_f8_commit_reading_while_navigating_conversion_candidates() {
+    let cases = [
+        (Keysym::F6, "がっこう"),
+        (Keysym::F7, "ガッコウ"),
+        (Keysym::F8, "ｶﾞｯｺｳ"),
+    ];
+
+    for (key, expected) in cases {
+        let mut engine = InputMethodEngine::new();
+        for ch in "gakkou".chars() {
+            engine.process_key(&press(ch));
+        }
+        engine.process_key(&press_key(Keysym::SPACE));
+        engine.process_key(&press_key(Keysym::SPACE));
+        assert!(matches!(engine.state(), InputState::Conversion { .. }));
+
+        let result = engine.process_key(&press_key(key));
+
+        assert!(result.consumed, "{key:?} must not pass through to macOS");
+        assert_eq!(committed_text(&result), Some(expected));
+        assert!(matches!(engine.state(), InputState::Empty));
+        assert!(
+            result
+                .actions
+                .iter()
+                .any(|action| matches!(action, EngineAction::HideCandidates))
+        );
+    }
+}
+
+#[test]
 fn f9_and_f10_are_consumed_noops_while_composing() {
     for key in [Keysym::F9, Keysym::F10] {
         let mut engine = make_live_conversion_engine();

@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use tracing::debug;
 
+use super::input::ComposingCommitForm;
 use super::*;
 use crate::core::engine::long_conversion::{
     MAX_FINAL_CANDIDATES, MAX_SEARCH_STATES, MAX_SEGMENT_CANDIDATES, RankedText,
@@ -1093,6 +1094,9 @@ impl InputMethodEngine {
             Keysym::PAGE_DOWN => self.next_candidate_page(),
             Keysym::PAGE_UP => self.prev_candidate_page(),
             Keysym::BACKSPACE => self.backspace_conversion(),
+            Keysym::F6 => self.commit_composing_as(ComposingCommitForm::Hiragana),
+            Keysym::F7 => self.commit_composing_as(ComposingCommitForm::FullKatakana),
+            Keysym::F8 => self.commit_composing_as(ComposingCommitForm::HalfKatakana),
             Keysym::F9 | Keysym::F10 => EngineResult::consumed(),
             _ => {
                 // Ctrl+N / Ctrl+P: emacs-style candidate navigation

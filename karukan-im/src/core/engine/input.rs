@@ -2,7 +2,7 @@
 
 use super::*;
 
-enum ComposingCommitForm {
+pub(super) enum ComposingCommitForm {
     Hiragana,
     FullKatakana,
     HalfKatakana,
@@ -968,7 +968,7 @@ impl InputMethodEngine {
         )
     }
 
-    fn commit_composing_as(&mut self, form: ComposingCommitForm) -> EngineResult {
+    pub(super) fn commit_composing_as(&mut self, form: ComposingCommitForm) -> EngineResult {
         self.invalidate_live_results();
         self.flush_romaji_to_composed();
         let reading = self.input_buf.text.clone();
