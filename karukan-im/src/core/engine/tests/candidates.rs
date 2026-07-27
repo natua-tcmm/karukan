@@ -1,7 +1,9 @@
 use super::*;
 use std::io::Write;
 
+use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
 use karukan_engine::{Dictionary, SegmentLearningCache};
+use karukan_engine::{DictionaryCategory, DictionarySource};
 
 // --- Candidate preservation tests ---
 
@@ -53,6 +55,30 @@ fn user_dict_with(reading: &str, surface: &str) -> Dictionary {
     Dictionary::build_from_json(tmp.path()).unwrap()
 }
 
+fn user_dict_with_entries(entries: &[(&str, &str, f32)]) -> Dictionary {
+    Dictionary::build_from_normalized(entries.iter().map(|(reading, surface, score)| {
+        NormalizedDictionaryEntry::new(
+            reading,
+            surface,
+            *score,
+            DictionarySource::User,
+            DictionaryCategory::General,
+            None,
+        )
+        .unwrap()
+    }))
+    .unwrap()
+}
+
+fn set_composing_reading(engine: &mut InputMethodEngine, reading: &str) {
+    engine.input_buf.text = reading.to_string();
+    engine.input_buf.cursor_pos = reading.chars().count();
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text(reading),
+        romaji_buffer: String::new(),
+    };
+}
+
 #[test]
 fn single_hiragana_is_first_composing_candidate() {
     let mut engine = InputMethodEngine::new();
@@ -77,6 +103,7 @@ fn single_hiragana_is_live_text_and_first_candidate_before_model_alternatives() 
         romaji_buffer: String::new(),
     };
     engine.chunks = vec![ComposingChunk {
+        kind: ComposingChunkKind::Model,
         reading: "し".to_string(),
         converted: "詩".to_string(),
         candidates: vec!["詩".to_string(), "市".to_string()],
@@ -103,6 +130,7 @@ fn short_live_conversion_has_hiragana_as_candidate_two() {
         romaji_buffer: String::new(),
     };
     engine.chunks = vec![ComposingChunk {
+        kind: ComposingChunkKind::Model,
         reading: "しよう".to_string(),
         converted: "使用".to_string(),
         candidates: vec!["使用".to_string(), "仕様".to_string(), "しよう".to_string()],
@@ -138,6 +166,7 @@ fn five_character_live_conversion_has_hiragana_as_candidate_two() {
         romaji_buffer: String::new(),
     };
     engine.chunks = vec![ComposingChunk {
+        kind: ComposingChunkKind::Model,
         reading: "あいうえお".to_string(),
         converted: "相上尾".to_string(),
         candidates: vec![
@@ -164,6 +193,7 @@ fn six_character_live_conversion_has_hiragana_as_candidate_two() {
         romaji_buffer: String::new(),
     };
     engine.chunks = vec![ComposingChunk {
+        kind: ComposingChunkKind::Model,
         reading: "あいうえおか".to_string(),
         converted: "相上丘".to_string(),
         candidates: vec![
@@ -190,6 +220,7 @@ fn seven_character_live_conversion_keeps_three_whole_candidates() {
         romaji_buffer: String::new(),
     };
     engine.chunks = vec![ComposingChunk {
+        kind: ComposingChunkKind::Model,
         reading: "あいうえおかき".to_string(),
         converted: "相上尾下記".to_string(),
         candidates: vec![
@@ -220,6 +251,7 @@ fn short_live_conversion_removes_katakana_only_and_mixed_kana_candidates() {
         romaji_buffer: String::new(),
     };
     engine.chunks = vec![ComposingChunk {
+        kind: ComposingChunkKind::Model,
         reading: "しよう".to_string(),
         converted: "使用".to_string(),
         candidates: vec![
@@ -309,6 +341,7 @@ fn punctuation_does_not_disable_single_hiragana_priority() {
             romaji_buffer: String::new(),
         };
         engine.chunks = vec![ComposingChunk {
+            kind: ComposingChunkKind::Model,
             reading: reading.to_string(),
             converted: kanji_candidate.clone(),
             candidates: vec![kanji_candidate, katakana_candidate.clone()],
@@ -341,6 +374,156 @@ fn exact_user_dictionary_entry_becomes_live_text_without_model() {
     assert_eq!(engine.live.text, "karukan");
     assert_eq!(engine.preedit().map(Preedit::text), Some("karukan"));
     assert_eq!(candidates.first().map(String::as_str), Some("karukan"));
+}
+
+#[test]
+fn embedded_user_dictionary_entry_is_pinned_without_model() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with("かるかん", "karukan"));
+    set_composing_reading(&mut engine, "かるかんをつかう");
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(engine.live.text, "karukanをつかう");
+    assert_eq!(engine.preedit().map(Preedit::text), Some("karukanをつかう"));
+    assert_eq!(
+        candidates.first().map(String::as_str),
+        Some("karukanをつかう")
+    );
+    assert_eq!(engine.chunks[0].kind, ComposingChunkKind::UserDictionary);
+    assert_eq!(engine.chunks[0].converted, "karukan");
+}
+
+#[test]
+fn multiple_embedded_entries_survive_digits_and_punctuation() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with_entries(&[
+        ("かるかん", "karukan", 0.0),
+        ("にこにこ", "ニコニコ", 0.0),
+    ]));
+    set_composing_reading(&mut engine, "かるかん123、にこにこ");
+
+    engine.refresh_input_state();
+
+    assert_eq!(engine.live.text, "karukan123、ニコニコ");
+    assert_eq!(
+        engine
+            .chunks
+            .iter()
+            .filter(|chunk| chunk.kind == ComposingChunkKind::UserDictionary)
+            .count(),
+        2
+    );
+    assert!(engine.chunks.iter().any(|chunk| {
+        chunk.kind == ComposingChunkKind::Passthrough && chunk.reading == "123、"
+    }));
+}
+
+#[test]
+fn embedded_user_dictionary_alternatives_become_whole_candidates() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with_entries(&[
+        ("かるかん", "karukan", 0.0),
+        ("かるかん", "軽羹", 1.0),
+    ]));
+    set_composing_reading(&mut engine, "かるかんを");
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(candidates.first().map(String::as_str), Some("karukanを"));
+    assert!(candidates.iter().any(|candidate| candidate == "軽羹を"));
+}
+
+#[test]
+fn exact_katakana_user_surface_survives_short_candidate_filtering() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with("にこにこ", "ニコニコ"));
+    set_composing_reading(&mut engine, "にこにこ");
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(engine.live.text, "ニコニコ");
+    assert_eq!(candidates.first().map(String::as_str), Some("ニコニコ"));
+}
+
+#[test]
+fn one_character_user_entry_is_ignored_inside_a_longer_reading() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with("あ", "亜"));
+    set_composing_reading(&mut engine, "あい");
+
+    engine.refresh_input_state();
+
+    assert_ne!(engine.live.text, "亜い");
+    assert!(
+        engine
+            .chunks
+            .iter()
+            .all(|chunk| chunk.kind != ComposingChunkKind::UserDictionary)
+    );
+}
+
+#[test]
+fn embedded_zu_du_correction_uses_user_dictionary_surface() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with("つづく", "続く"));
+    set_composing_reading(&mut engine, "つずくよ");
+
+    engine.refresh_input_state();
+
+    assert_eq!(engine.live.text, "続くよ");
+    assert_eq!(engine.chunks[0].reading, "つずく");
+    assert_eq!(engine.chunks[0].kind, ComposingChunkKind::UserDictionary);
+}
+
+#[test]
+fn user_entry_can_replace_model_chunks_across_the_length_cap() {
+    let mut engine = make_live_conversion_engine();
+    engine.config.composing_chunk_len = 2;
+    engine.dicts.user = Some(user_dict_with("かるかん", "karukan"));
+    set_composing_reading(&mut engine, "かるか");
+    engine.refresh_input_state();
+    assert_eq!(
+        engine
+            .chunks
+            .iter()
+            .map(|chunk| chunk.reading.as_str())
+            .collect::<Vec<_>>(),
+        ["かる", "か"]
+    );
+
+    set_composing_reading(&mut engine, "かるかん");
+    engine.refresh_input_state();
+
+    assert_eq!(engine.live.text, "karukan");
+    assert_eq!(engine.chunks.len(), 1);
+    assert_eq!(engine.chunks[0].reading, "かるかん");
+    assert_eq!(engine.chunks[0].kind, ComposingChunkKind::UserDictionary);
+}
+
+#[test]
+fn stale_model_prefix_cannot_override_a_new_dictionary_span() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with("かるかん", "karukan"));
+    set_composing_reading(&mut engine, "かるかんを");
+    engine.chunks = vec![ComposingChunk {
+        reading: "かるかん".to_string(),
+        converted: "軽羹".to_string(),
+        candidates: vec!["軽羹".to_string()],
+        kind: ComposingChunkKind::Model,
+    }];
+
+    engine.apply_background_candidates(
+        "かるかん".to_string(),
+        "かるかんを".to_string(),
+        vec!["軽羹".to_string()],
+    );
+
+    assert_eq!(engine.live.text, "karukanを");
+    assert_eq!(engine.preedit().map(Preedit::text), Some("karukanを"));
 }
 
 #[test]
@@ -479,6 +662,7 @@ fn space_reuses_the_exact_live_candidate_list() {
         romaji_buffer: String::new(),
     };
     engine.chunks = vec![ComposingChunk {
+        kind: ComposingChunkKind::Model,
         reading: "しよう".to_string(),
         converted: "使用".to_string(),
         candidates: vec!["使用".to_string(), "仕様".to_string(), "しよう".to_string()],

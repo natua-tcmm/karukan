@@ -11,6 +11,7 @@ mod display;
 mod init;
 mod input;
 mod input_buffer;
+mod live_dictionary;
 mod long_conversion;
 mod morphology;
 mod reading_correction;
@@ -76,7 +77,12 @@ fn finalize_whole_candidates(
     // For a short reading, kana-only alternatives that contain katakana are
     // noise: remove both all-katakana and hiragana/katakana-mixed surfaces.
     // Punctuation and symbols do not make such a surface meaningful.
-    candidates.retain(|candidate| !is_kana_only_with_katakana(&candidate.text));
+    candidates.retain(|candidate| {
+        let dictionary_backed = candidate.source_label.as_deref()
+            == Some(CandidateSource::UserDictionary.label())
+            || candidate.source_label.as_deref() == Some(CandidateSource::Hybrid.label());
+        dictionary_backed || !is_kana_only_with_katakana(&candidate.text)
+    });
 
     // A one-letter reading remains raw at candidate 1. Punctuation such as
     // `、` and `〜` is ignored by conversion_character_count, so `し、` and

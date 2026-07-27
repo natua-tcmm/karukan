@@ -50,6 +50,36 @@ fn prioritize_single_hiragana_candidate(
 }
 
 impl InputMethodEngine {
+    fn live_dictionary_source_label(&self, reading: &str) -> Option<String> {
+        let matches = self.live_user_dictionary_matches(reading);
+        if matches.is_empty() {
+            return None;
+        }
+        let reading_len = reading.chars().count();
+        let source = if matches.len() == 1
+            && matches[0].char_start == 0
+            && matches[0].char_end == reading_len
+        {
+            CandidateSource::UserDictionary
+        } else {
+            CandidateSource::Hybrid
+        };
+        Some(source.label().to_string())
+    }
+
+    fn live_dictionary_candidate(
+        text: String,
+        reading: &str,
+        source_label: Option<&str>,
+    ) -> Candidate {
+        Candidate {
+            text,
+            reading: Some(reading.to_string()),
+            source_label: source_label.map(str::to_string),
+            description: None,
+        }
+    }
+
     /// Refresh the dedicated emoji picker without invoking live conversion,
     /// learning, dictionaries, or the general rewriter chain.
     fn refresh_emoji_state(&mut self) -> EngineResult {
@@ -88,13 +118,14 @@ impl InputMethodEngine {
 
     /// Pick the visible live-conversion surface.
     ///
-    /// A single hiragana remains raw by design. For longer readings, an exact
-    /// user-dictionary entry takes precedence over model inference.
+    /// A single hiragana remains raw by design. Otherwise user-dictionary
+    /// spans are pinned and the remaining gaps use reusable/model text.
     fn preferred_live_surface(&self, reading: &str, model_surface: Option<&str>) -> Option<String> {
         if should_prioritize_single_hiragana(self.input_mode, reading) {
             return Some(reading.to_string());
         }
-        self.lookup_user_dict_live_surface(reading)
+        self.preview_live_user_dictionary_candidates(reading, 1)
+            .and_then(|candidates| candidates.into_iter().next())
             .or_else(|| model_surface.map(str::to_string))
     }
 
@@ -232,9 +263,16 @@ impl InputMethodEngine {
             // frontends show the raw reading once the preedit displays converted
             // text — stays on screen for the whole live conversion.
             let mut all_candidates = self.lookup_learning_candidates(&reading);
+            let live_dictionary_label = self.live_dictionary_source_label(&reading);
             let model_candidates: Vec<Candidate> = candidates
                 .into_iter()
-                .map(|s| Candidate::with_reading(s, &reading))
+                .map(|text| {
+                    Self::live_dictionary_candidate(
+                        text,
+                        &reading,
+                        live_dictionary_label.as_deref(),
+                    )
+                })
                 .collect();
             append_candidates_dedup(&mut all_candidates, model_candidates);
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
@@ -305,6 +343,30 @@ impl InputMethodEngine {
             self.live.clear();
         }
         let mut candidates = self.lookup_learning_candidates(&reading);
+        let live_dictionary_label = self.live_dictionary_source_label(&reading);
+        if let Some(preview) = self.preview_live_user_dictionary_candidates(
+            &reading,
+            live_candidate_pool_limit(
+                self.live.enabled,
+                self.input_mode,
+                &reading,
+                self.config.live_num_candidates,
+            ),
+        ) {
+            append_candidates_dedup(
+                &mut candidates,
+                preview
+                    .into_iter()
+                    .map(|text| {
+                        Self::live_dictionary_candidate(
+                            text,
+                            &reading,
+                            live_dictionary_label.as_deref(),
+                        )
+                    })
+                    .collect(),
+            );
+        }
         append_candidates_dedup(&mut candidates, self.lookup_dict_candidates(&reading));
         append_candidates_dedup(&mut candidates, self.lookup_rewriter_variants(&reading));
         if !self.live.text.is_empty() {
@@ -356,6 +418,7 @@ impl InputMethodEngine {
             chunk_len: self.config.composing_chunk_len,
             num_candidates,
             old_chunks: self.chunks.clone(),
+            user_matches: self.live_user_dictionary_matches(&self.input_buf.text),
         };
         if let Some(worker) = self.converters.kanji.as_ref() {
             worker.submit_live(request);
@@ -425,6 +488,30 @@ impl InputMethodEngine {
             self.live.clear();
         }
         let mut all_candidates = self.lookup_learning_candidates(&current_reading);
+        let live_dictionary_label = self.live_dictionary_source_label(&current_reading);
+        if let Some(preview) = self.preview_live_user_dictionary_candidates(
+            &current_reading,
+            live_candidate_pool_limit(
+                self.live.enabled,
+                self.input_mode,
+                &current_reading,
+                self.config.live_num_candidates,
+            ),
+        ) {
+            append_candidates_dedup(
+                &mut all_candidates,
+                preview
+                    .into_iter()
+                    .map(|text| {
+                        Self::live_dictionary_candidate(
+                            text,
+                            &current_reading,
+                            live_dictionary_label.as_deref(),
+                        )
+                    })
+                    .collect(),
+            );
+        }
         let whole_candidates = prefix_candidates
             .into_iter()
             .map(|prefix| Candidate::with_reading(format!("{prefix}{suffix}"), &current_reading))
