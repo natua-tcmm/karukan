@@ -343,17 +343,20 @@ impl InputMethodEngine {
                         });
                     candidates.insert(0, candidate);
                 }
-                candidates.truncate(WHOLE_CANDIDATE_LIMIT);
-
                 // Map ConversionCandidate → public Candidate. The two annotation
                 // slots are kept disjoint so descriptions never duplicate between the
                 // aux text and the candidate's right-side comment.
-                CandidateList::new(
-                    candidates
-                        .into_iter()
-                        .map(|candidate| candidate.into_ui_candidate(&reading))
-                        .collect(),
-                )
+                let mut candidates: Vec<Candidate> = candidates
+                    .into_iter()
+                    .map(|candidate| candidate.into_ui_candidate(&reading))
+                    .collect();
+                finalize_whole_candidates(
+                    !prev_suggest_text.is_empty(),
+                    self.input_mode,
+                    &reading,
+                    &mut candidates,
+                );
+                CandidateList::new(candidates)
             });
 
         if candidate_list.is_empty() {
@@ -413,7 +416,8 @@ impl InputMethodEngine {
         full_candidates: CandidateList,
     ) -> crate::core::state::ConversionSession {
         // Candidate 1 is the exact live-conversion result. Candidate navigation
-        // may currently be highlighting candidate 2 or 3, but partial
+        // may currently be highlighting candidate 2, 3, or (for a short
+        // reading) 4, but partial
         // conversion must derive stable boundaries from the most likely
         // sentence rather than from whichever whole candidate was viewed last.
         let live_surface = full_candidates

@@ -93,7 +93,7 @@ fn single_hiragana_is_live_text_and_first_candidate_before_model_alternatives() 
 }
 
 #[test]
-fn multi_character_live_text_is_first_and_whole_candidates_are_limited_to_three() {
+fn short_live_conversion_has_hiragana_as_candidate_four() {
     let mut engine = make_live_conversion_engine();
     learn(&mut engine, "しよう", "私用");
     engine.input_buf.text = "しよう".to_string();
@@ -113,8 +113,75 @@ fn multi_character_live_text_is_first_and_whole_candidates_are_limited_to_three(
 
     assert_eq!(engine.preedit().unwrap().text(), "使用");
     assert_eq!(candidates.first().map(String::as_str), Some("使用"));
-    assert_eq!(candidates.len(), WHOLE_CANDIDATE_LIMIT);
+    assert_eq!(candidates.len(), SHORT_LIVE_CANDIDATE_LIMIT);
+    assert_eq!(
+        candidates.get(3).map(String::as_str),
+        Some("しよう"),
+        "short live conversion must reserve candidate 4 for hiragana"
+    );
     assert!(candidates.iter().any(|candidate| candidate == "私用"));
+    assert_eq!(
+        engine.composing_candidates.as_ref().unwrap().candidates()[3]
+            .description
+            .as_deref(),
+        Some("[全]ひらがな")
+    );
+}
+
+#[test]
+fn five_character_live_conversion_has_hiragana_as_candidate_four() {
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = "あいうえお".to_string();
+    engine.input_buf.cursor_pos = 5;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("あいうえお"),
+        romaji_buffer: String::new(),
+    };
+    engine.chunks = vec![ComposingChunk {
+        reading: "あいうえお".to_string(),
+        converted: "相上尾".to_string(),
+        candidates: vec![
+            "相上尾".to_string(),
+            "藍植尾".to_string(),
+            "愛上緒".to_string(),
+        ],
+    }];
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(candidates.len(), SHORT_LIVE_CANDIDATE_LIMIT);
+    assert_eq!(candidates.get(3).map(String::as_str), Some("あいうえお"));
+}
+
+#[test]
+fn six_character_live_conversion_keeps_three_whole_candidates() {
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = "あいうえおか".to_string();
+    engine.input_buf.cursor_pos = 6;
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("あいうえおか"),
+        romaji_buffer: String::new(),
+    };
+    engine.chunks = vec![ComposingChunk {
+        reading: "あいうえおか".to_string(),
+        converted: "相上丘".to_string(),
+        candidates: vec![
+            "相上丘".to_string(),
+            "藍上丘".to_string(),
+            "愛植岡".to_string(),
+        ],
+    }];
+
+    let result = engine.refresh_input_state();
+    let candidates = shown_candidate_texts(&result);
+
+    assert_eq!(candidates.len(), WHOLE_CANDIDATE_LIMIT);
+    assert!(
+        !candidates
+            .iter()
+            .any(|candidate| candidate == "あいうえおか")
+    );
 }
 
 #[test]
@@ -253,7 +320,14 @@ fn space_skips_the_live_first_candidate_and_starts_from_the_second() {
         engine.preedit().map(Preedit::text),
         candidates.selected_text()
     );
-    assert_eq!(candidates.len(), WHOLE_CANDIDATE_LIMIT);
+    assert_eq!(candidates.len(), SHORT_LIVE_CANDIDATE_LIMIT);
+    assert_eq!(
+        candidates
+            .candidates()
+            .get(3)
+            .map(|candidate| candidate.text.as_str()),
+        Some("あい")
+    );
 }
 
 #[test]

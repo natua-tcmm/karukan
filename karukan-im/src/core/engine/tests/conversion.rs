@@ -227,6 +227,40 @@ fn exhausting_one_token_composing_candidates_enters_segmented_conversion() {
 }
 
 #[test]
+fn short_live_conversion_enters_segmented_mode_after_hiragana_candidate_four() {
+    let mut engine = make_live_conversion_engine();
+    engine.input_buf.text = "しよう".to_string();
+    engine.input_buf.cursor_pos = 3;
+    engine.live.text = "使用".to_string();
+    engine.state = InputState::Composing {
+        preedit: Preedit::with_text("使用"),
+        romaji_buffer: String::new(),
+    };
+    engine.composing_candidates = Some(CandidateList::from_strings_with_reading(
+        ["使用", "仕様", "私用", "しよう"],
+        "しよう",
+    ));
+    engine.composing_candidates_model_ready = true;
+
+    // Space starts at candidate 2, then advances through candidates 3 and 4.
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::SPACE));
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert_eq!(engine.preedit().map(Preedit::text), Some("しよう"));
+    assert!(matches!(
+        engine.state(),
+        InputState::Conversion { session } if session.is_whole_candidate_phase()
+    ));
+
+    // Advancing beyond candidate 4 activates segmented conversion.
+    engine.process_key(&press_key(Keysym::SPACE));
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("segmented conversion expected");
+    };
+    assert!(!session.is_whole_candidate_phase());
+}
+
+#[test]
 fn exhausting_whole_candidates_segments_the_live_first_surface() {
     use karukan_engine::dictionary_source::NormalizedDictionaryEntry;
     use karukan_engine::{DictionaryCategory, DictionarySource};

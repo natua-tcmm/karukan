@@ -38,8 +38,76 @@ use crate::config::settings::Settings;
 /// Whole-reading alternatives shown before bunsetsu correction takes over.
 const WHOLE_CANDIDATE_LIMIT: usize = 3;
 
+/// A short live conversion adds the raw hiragana reading after the three
+/// ordinary whole-reading alternatives.
+const SHORT_LIVE_CANDIDATE_LIMIT: usize = WHOLE_CANDIDATE_LIMIT + 1;
+
+/// Maximum reading length that receives the dedicated hiragana candidate.
+const SHORT_LIVE_READING_MAX_CHARS: usize = 5;
+
 /// Emoji mode deliberately shows one complete candidate page.
 const EMOJI_CANDIDATE_LIMIT: usize = CandidateList::DEFAULT_PAGE_SIZE;
+
+/// Finalize the whole-reading candidates shown while composing.
+///
+/// For a 2–5 character live conversion, candidate 4 is always the raw reading.
+/// Candidate 5 therefore remains the boundary at which navigation enters
+/// segmented conversion. A one-character hiragana keeps its existing safer
+/// behavior: the raw reading stays at candidate 1.
+fn finalize_whole_candidates(
+    live_surface_active: bool,
+    input_mode: InputMode,
+    reading: &str,
+    candidates: &mut Vec<Candidate>,
+) {
+    let reading_len = reading.chars().count();
+    let add_short_hiragana = live_surface_active
+        && input_mode == InputMode::Hiragana
+        && (2..=SHORT_LIVE_READING_MAX_CHARS).contains(&reading_len);
+    if !add_short_hiragana {
+        candidates.truncate(WHOLE_CANDIDATE_LIMIT);
+        return;
+    }
+
+    // Remove an earlier copy first, so the raw reading occupies exactly the
+    // dedicated fourth slot instead of being duplicated among model results.
+    candidates.retain(|candidate| candidate.text != reading);
+
+    // A model may return fewer than three distinct surfaces. Fill any vacant
+    // ordinary slots with useful script variants before appending hiragana.
+    let script_variants = [
+        (
+            karukan_engine::hiragana_to_katakana(reading),
+            "[全]カタカナ",
+        ),
+        (
+            karukan_engine::hiragana_to_half_katakana(reading),
+            "[半]カタカナ",
+        ),
+    ];
+    for (text, description) in script_variants {
+        if candidates.len() >= WHOLE_CANDIDATE_LIMIT {
+            break;
+        }
+        if text != reading && !candidates.iter().any(|candidate| candidate.text == text) {
+            candidates.push(Candidate {
+                text,
+                reading: Some(reading.to_string()),
+                source_label: None,
+                description: Some(description.to_string()),
+            });
+        }
+    }
+
+    candidates.truncate(WHOLE_CANDIDATE_LIMIT);
+    candidates.push(Candidate {
+        text: reading.to_string(),
+        reading: Some(reading.to_string()),
+        source_label: None,
+        description: Some("[全]ひらがな".to_string()),
+    });
+    debug_assert!(candidates.len() <= SHORT_LIVE_CANDIDATE_LIMIT);
+}
 
 /// Source of a conversion candidate
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -49,10 +49,6 @@ fn prioritize_single_hiragana_candidate(
     );
 }
 
-fn limit_whole_candidates(candidates: &mut Vec<Candidate>) {
-    candidates.truncate(WHOLE_CANDIDATE_LIMIT);
-}
-
 impl InputMethodEngine {
     /// Refresh the dedicated emoji picker without invoking live conversion,
     /// learning, dictionaries, or the general rewriter chain.
@@ -170,7 +166,12 @@ impl InputMethodEngine {
                 );
             }
             prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
-            limit_whole_candidates(&mut all_candidates);
+            finalize_whole_candidates(
+                !self.live.text.is_empty(),
+                self.input_mode,
+                &reading,
+                &mut all_candidates,
+            );
             if all_candidates.is_empty() {
                 self.clear_composing_candidates();
                 return EngineResult::consumed()
@@ -212,7 +213,12 @@ impl InputMethodEngine {
                 Candidate::with_reading(&live_text, &reading),
             );
             prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
-            limit_whole_candidates(&mut all_candidates);
+            finalize_whole_candidates(
+                !self.live.text.is_empty(),
+                self.input_mode,
+                &reading,
+                &mut all_candidates,
+            );
             let aux = self.format_aux_suggest(&self.input_buf.text.clone());
             let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
             self.mark_composing_candidates_model_ready();
@@ -236,7 +242,12 @@ impl InputMethodEngine {
         // Then dictionary candidates
         append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
         prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut all_candidates);
-        limit_whole_candidates(&mut all_candidates);
+        finalize_whole_candidates(
+            !self.live.text.is_empty(),
+            self.input_mode,
+            &reading,
+            &mut all_candidates,
+        );
         let aux = self.format_aux_suggest(&self.input_buf.text.clone());
         let candidate_list = self.set_composing_candidates(CandidateList::new(all_candidates));
         self.mark_composing_candidates_model_ready();
@@ -272,7 +283,12 @@ impl InputMethodEngine {
             );
         }
         prioritize_single_hiragana_candidate(self.input_mode, &reading, &mut candidates);
-        limit_whole_candidates(&mut candidates);
+        finalize_whole_candidates(
+            !self.live.text.is_empty(),
+            self.input_mode,
+            &reading,
+            &mut candidates,
+        );
         if candidates.is_empty() {
             self.clear_composing_candidates();
             return EngineResult::consumed()
@@ -390,7 +406,12 @@ impl InputMethodEngine {
             &current_reading,
             &mut all_candidates,
         );
-        limit_whole_candidates(&mut all_candidates);
+        finalize_whole_candidates(
+            !self.live.text.is_empty(),
+            self.input_mode,
+            &current_reading,
+            &mut all_candidates,
+        );
         let candidates = self.set_composing_candidates(CandidateList::new(all_candidates));
         if result_reading == current_reading {
             self.mark_composing_candidates_model_ready();
