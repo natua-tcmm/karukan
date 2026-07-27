@@ -120,7 +120,7 @@ fn single_hiragana_is_live_text_and_first_candidate_before_model_alternatives() 
 }
 
 #[test]
-fn short_live_conversion_has_hiragana_as_candidate_two() {
+fn short_live_conversion_has_hiragana_and_katakana_in_dedicated_slots() {
     let mut engine = make_live_conversion_engine();
     learn(&mut engine, "しよう", "私用");
     engine.input_buf.text = "しよう".to_string();
@@ -147,6 +147,11 @@ fn short_live_conversion_has_hiragana_as_candidate_two() {
         Some("しよう"),
         "short live conversion must reserve candidate 2 for hiragana"
     );
+    assert_eq!(
+        candidates.get(2).map(String::as_str),
+        Some("シヨウ"),
+        "short live conversion must reserve candidate 3 for katakana"
+    );
     assert!(candidates.iter().any(|candidate| candidate == "私用"));
     assert_eq!(
         engine.composing_candidates.as_ref().unwrap().candidates()[1]
@@ -154,10 +159,16 @@ fn short_live_conversion_has_hiragana_as_candidate_two() {
             .as_deref(),
         Some("[全]ひらがな")
     );
+    assert_eq!(
+        engine.composing_candidates.as_ref().unwrap().candidates()[2]
+            .description
+            .as_deref(),
+        Some("[全]カタカナ")
+    );
 }
 
 #[test]
-fn five_character_live_conversion_has_hiragana_as_candidate_two() {
+fn five_character_live_conversion_has_dedicated_kana_candidates() {
     let mut engine = make_live_conversion_engine();
     engine.input_buf.text = "あいうえお".to_string();
     engine.input_buf.cursor_pos = 5;
@@ -181,10 +192,11 @@ fn five_character_live_conversion_has_hiragana_as_candidate_two() {
 
     assert_eq!(candidates.len(), SHORT_LIVE_CANDIDATE_LIMIT);
     assert_eq!(candidates.get(1).map(String::as_str), Some("あいうえお"));
+    assert_eq!(candidates.get(2).map(String::as_str), Some("アイウエオ"));
 }
 
 #[test]
-fn six_character_live_conversion_has_hiragana_as_candidate_two() {
+fn six_character_live_conversion_has_dedicated_kana_candidates() {
     let mut engine = make_live_conversion_engine();
     engine.input_buf.text = "あいうえおか".to_string();
     engine.input_buf.cursor_pos = 6;
@@ -208,6 +220,7 @@ fn six_character_live_conversion_has_hiragana_as_candidate_two() {
 
     assert_eq!(candidates.len(), SHORT_LIVE_CANDIDATE_LIMIT);
     assert_eq!(candidates.get(1).map(String::as_str), Some("あいうえおか"));
+    assert_eq!(candidates.get(2).map(String::as_str), Some("アイウエオカ"));
 }
 
 #[test]
@@ -242,7 +255,7 @@ fn seven_character_live_conversion_keeps_three_whole_candidates() {
 }
 
 #[test]
-fn short_live_conversion_removes_katakana_only_and_mixed_kana_candidates() {
+fn short_live_conversion_keeps_only_the_dedicated_katakana_candidate() {
     let mut engine = make_live_conversion_engine();
     engine.input_buf.text = "しよう".to_string();
     engine.input_buf.cursor_pos = 3;
@@ -267,7 +280,7 @@ fn short_live_conversion_removes_katakana_only_and_mixed_kana_candidates() {
     let result = engine.refresh_input_state();
     let candidates = shown_candidate_texts(&result);
 
-    assert_eq!(candidates, ["使用", "しよう", "仕様", "私用"]);
+    assert_eq!(candidates, ["使用", "しよう", "シヨウ", "仕様", "私用"]);
 }
 
 #[test]
@@ -293,7 +306,7 @@ fn filtered_live_surface_matches_candidate_one_and_space_reuses_the_list() {
     );
     let before = shown_candidate_texts(&result);
 
-    assert_eq!(before, ["仕手", "して", "し手", "為手"]);
+    assert_eq!(before, ["仕手", "して", "シテ", "し手", "為手"]);
     assert_eq!(engine.live.text, "仕手");
     assert_eq!(engine.preedit().map(Preedit::text), Some("仕手"));
 

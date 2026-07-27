@@ -39,11 +39,11 @@ use crate::config::settings::Settings;
 /// Whole-reading alternatives shown before bunsetsu correction takes over.
 const WHOLE_CANDIDATE_LIMIT: usize = 3;
 
-/// A short live conversion adds the raw hiragana reading to the three
-/// ordinary whole-reading alternatives.
-const SHORT_LIVE_CANDIDATE_LIMIT: usize = WHOLE_CANDIDATE_LIMIT + 1;
+/// A short live conversion adds dedicated hiragana and full-width katakana
+/// readings to the three ordinary whole-reading alternatives.
+const SHORT_LIVE_CANDIDATE_LIMIT: usize = WHOLE_CANDIDATE_LIMIT + 2;
 
-/// Maximum reading length that receives the dedicated hiragana candidate.
+/// Maximum reading length that receives the dedicated kana candidates.
 const SHORT_LIVE_READING_MAX_CHARS: usize = 6;
 
 /// Internal candidate pool used to compensate for kana-only candidates that
@@ -55,8 +55,9 @@ const EMOJI_CANDIDATE_LIMIT: usize = CandidateList::DEFAULT_PAGE_SIZE;
 
 /// Finalize the whole-reading candidates shown while composing.
 ///
-/// For a 2–6 character live conversion, candidate 2 is always the raw reading.
-/// Candidate 5 therefore remains the boundary at which navigation enters
+/// For a 2–6 character live conversion, candidate 2 is always the raw hiragana
+/// reading and candidate 3 is its full-width katakana form. Candidate 6 therefore
+/// remains the boundary at which navigation enters
 /// segmented conversion. A one-character hiragana keeps its existing safer
 /// behavior: the raw reading stays at candidate 1.
 fn finalize_whole_candidates(
@@ -92,9 +93,32 @@ fn finalize_whole_candidates(
         return;
     }
 
-    // Remove an earlier copy first, retain the ordinary top three, and then
-    // insert the raw reading into its dedicated second slot.
+    // Remove earlier copies first, retain the ordinary top three, and then
+    // insert the raw hiragana and full-width katakana readings into their
+    // dedicated second and third slots. If the live surface itself is the
+    // canonical katakana form (for example, an exact user-dictionary entry),
+    // keep it at candidate 1 instead of duplicating it.
+    let katakana = karukan_engine::hiragana_to_katakana(reading);
+    let katakana_is_live_surface = candidates
+        .first()
+        .is_some_and(|candidate| candidate.text == katakana);
     candidates.retain(|candidate| candidate.text != reading);
+    let katakana_candidate = if katakana_is_live_surface {
+        None
+    } else {
+        candidates
+            .iter()
+            .position(|candidate| candidate.text == katakana)
+            .map(|index| candidates.remove(index))
+            .or_else(|| {
+                Some(Candidate {
+                    text: katakana,
+                    reading: Some(reading.to_string()),
+                    source_label: None,
+                    description: Some("[全]カタカナ".to_string()),
+                })
+            })
+    };
 
     candidates.truncate(WHOLE_CANDIDATE_LIMIT);
     candidates.insert(
@@ -106,6 +130,9 @@ fn finalize_whole_candidates(
             description: Some("[全]ひらがな".to_string()),
         },
     );
+    if let Some(katakana_candidate) = katakana_candidate {
+        candidates.insert(2.min(candidates.len()), katakana_candidate);
+    }
     debug_assert!(candidates.len() <= SHORT_LIVE_CANDIDATE_LIMIT);
 }
 

@@ -420,8 +420,8 @@ impl InputMethodEngine {
         full_candidates: CandidateList,
     ) -> crate::core::state::ConversionSession {
         // Candidate 1 is the exact live-conversion result. Candidate navigation
-        // may currently be highlighting candidate 2, 3, or (for a short
-        // reading) 4, but partial
+        // may currently be highlighting candidate 2, 3, 4, or (for a short
+        // reading) 5, but partial
         // conversion must derive stable boundaries from the most likely
         // sentence rather than from whichever whole candidate was viewed last.
         let live_surface = full_candidates
