@@ -52,9 +52,9 @@ fn build_candidates_omits_learning_when_skipped() {
 }
 
 #[test]
-fn tab_key_selects_composing_learning_candidate() {
-    // End-to-end: type the reading, press Tab → opt into the auto-suggest
-    // list already shown during composing. Enter then commits that selection.
+fn tab_key_starts_explicit_conversion_with_learning_candidates() {
+    // Tab follows the same explicit-conversion path as Space, including
+    // correction-learning candidates.
     let mut engine = engine_with_learned("あい", "藍");
 
     engine.process_key(&press('a'));
@@ -63,17 +63,16 @@ fn tab_key_selects_composing_learning_candidate() {
 
     let result = engine.process_key(&press_key(Keysym::TAB));
     assert!(result.consumed);
-    assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.preedit().unwrap().text(), "藍");
-
-    let commit = engine.process_key(&press_key(Keysym::RETURN));
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
     assert!(
-        commit
-            .actions
+        engine
+            .state()
+            .candidates()
+            .unwrap()
+            .candidates()
             .iter()
-            .any(|a| matches!(a, EngineAction::Commit(text) if text == "藍"))
+            .any(|candidate| candidate.text == "藍")
     );
-    assert!(matches!(engine.state(), InputState::Empty));
 }
 
 #[test]

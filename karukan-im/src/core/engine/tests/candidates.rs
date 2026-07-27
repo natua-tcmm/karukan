@@ -780,45 +780,43 @@ fn converted_prefix_stays_visible_while_input_suffix_grows() {
 }
 
 #[test]
-fn tab_selects_visible_composing_candidate_then_enter_commits_it() {
-    let mut engine = InputMethodEngine::new();
+fn space_tab_and_down_start_from_the_same_second_candidate() {
+    for keysym in [Keysym::SPACE, Keysym::TAB, Keysym::DOWN] {
+        let reading = "しよう";
+        let candidates = ["使用", "仕様", "私用"];
+        let mut engine = make_live_conversion_engine();
+        engine.input_buf.text = reading.to_string();
+        engine.input_buf.cursor_pos = reading.chars().count();
+        engine.live.text = candidates[0].to_string();
+        engine.composing_candidates = Some(CandidateList::from_strings_with_reading(
+            candidates, reading,
+        ));
+        engine.composing_candidates_model_ready = true;
+        engine.state = InputState::Composing {
+            preedit: Preedit::with_text(candidates[0]),
+            romaji_buffer: String::new(),
+        };
 
-    // "a" has composing-time rewriter candidates: あ, ア, ｱ.
-    engine.process_key(&press('a'));
-    engine.process_key(&press('i'));
-    assert!(engine.composing_candidates.is_some());
+        let result = engine.process_key(&press_key(keysym));
 
-    // First Tab opts into the visible first suggestion without opening
-    // explicit Conversion state.
-    let first = engine.process_key(&press_key(Keysym::TAB));
-    assert!(first.consumed);
-    assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.preedit().unwrap().text(), "アイ");
-
-    // Second Tab advances to the next visible suggestion.
-    let second = engine.process_key(&press_key(Keysym::TAB));
-    assert!(second.consumed);
-    assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.preedit().unwrap().text(), "ｱｲ");
-
-    let commit = engine.process_key(&press_key(Keysym::RETURN));
-    assert_eq!(commit_text(&commit), Some("ｱｲ"));
-    assert!(matches!(engine.state(), InputState::Empty));
-}
-
-#[test]
-fn down_selects_visible_composing_candidate_like_tab() {
-    let mut engine = InputMethodEngine::new();
-
-    engine.process_key(&press('a'));
-    engine.process_key(&press('i'));
-    let result = engine.process_key(&press_key(Keysym::DOWN));
-    assert!(result.consumed);
-    assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.preedit().unwrap().text(), "アイ");
-
-    let commit = engine.process_key(&press_key(Keysym::RETURN));
-    assert_eq!(commit_text(&commit), Some("アイ"));
+        assert!(result.consumed, "keysym={keysym:?}");
+        assert!(
+            matches!(engine.state(), InputState::Conversion { .. }),
+            "keysym={keysym:?}"
+        );
+        let selected = engine.state().candidates().unwrap();
+        assert_eq!(selected.cursor(), 1, "keysym={keysym:?}");
+        assert_eq!(
+            selected.selected_text(),
+            Some(candidates[1]),
+            "keysym={keysym:?}"
+        );
+        assert_eq!(
+            engine.preedit().map(Preedit::text),
+            Some(candidates[1]),
+            "keysym={keysym:?}"
+        );
+    }
 }
 
 #[test]

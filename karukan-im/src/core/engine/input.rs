@@ -720,12 +720,14 @@ impl InputMethodEngine {
             Keysym::SPACE if self.input_mode == InputMode::Emoji => {
                 self.select_next_composing_candidate()
             }
-            Keysym::TAB | Keysym::DOWN => self.select_next_composing_candidate(),
-            Keysym::UP => self.select_prev_composing_candidate(),
-            Keysym::SPACE if self.composing_candidate_selected => {
+            Keysym::TAB | Keysym::DOWN if self.input_mode == InputMode::Emoji => {
                 self.select_next_composing_candidate()
             }
-            Keysym::SPACE => self.start_conversion(false),
+            Keysym::UP => self.select_prev_composing_candidate(),
+            Keysym::SPACE | Keysym::TAB | Keysym::DOWN if self.composing_candidate_selected => {
+                self.select_next_composing_candidate()
+            }
+            Keysym::SPACE | Keysym::TAB | Keysym::DOWN => self.start_conversion(false),
             Keysym::LEFT => self.move_caret_left(),
             Keysym::RIGHT => self.move_caret_right(),
             Keysym::HOME => self.move_caret_home(),
@@ -852,10 +854,8 @@ impl InputMethodEngine {
 
     /// Move through the auto-suggest candidates shown during Composing.
     ///
-    /// The first Tab/Down only opts into the already-highlighted first
-    /// candidate. Subsequent presses advance through the list. This preserves
-    /// Enter's traditional behavior until the user explicitly starts selecting
-    /// suggestions.
+    /// When selection was entered through Up, the emoji picker, or a click,
+    /// subsequent forward-navigation presses advance through this list.
     fn select_next_composing_candidate(&mut self) -> EngineResult {
         let Some(mut candidates) = self.composing_candidates.clone() else {
             return EngineResult::not_consumed();

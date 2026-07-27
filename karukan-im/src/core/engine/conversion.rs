@@ -276,11 +276,11 @@ impl InputMethodEngine {
 
     /// Start kanji conversion for the current input buffer.
     ///
-    /// Called when Space is pressed: flushes any pending romaji,
+    /// Called when Space, Tab, or Down is pressed: flushes any pending romaji,
     /// resolves the reading, runs `build_conversion_candidates`, and
     /// transitions into the Conversion state. The previous live-conversion
     /// result is preserved as the first model candidate. Because that result
-    /// is already visible before Space, explicit conversion starts from the
+    /// is already visible before navigation, explicit conversion starts from the
     /// second candidate when one exists.
     ///
     /// `skip_learning` remains available for internal/tests that need to inspect
@@ -308,7 +308,7 @@ impl InputMethodEngine {
             return EngineResult::consumed();
         }
 
-        // When Space does not change the reading, carry the exact list that
+        // When candidate navigation does not change the reading, carry the exact list that
         // was already visible during live conversion into Conversion state.
         // Re-running whole/hybrid inference here made candidates 2 and 3
         // differ before and after Space even though candidate 1 was pinned.
@@ -323,7 +323,7 @@ impl InputMethodEngine {
                 None
             }
             .unwrap_or_else(|| {
-                // A pending romaji suffix may be flushed by Space, changing the
+                // A pending romaji suffix may be flushed by candidate navigation, changing the
                 // reading after the composing candidates were built. Only that
                 // stale-list case regenerates explicit candidates.
                 let candidate_pool_limit = live_candidate_pool_limit(

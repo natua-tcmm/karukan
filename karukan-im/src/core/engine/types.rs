@@ -68,7 +68,7 @@ pub(in crate::core) struct SurroundingContext {
 pub struct EngineConfig {
     /// Number of model candidates generated during live conversion
     pub live_num_candidates: usize,
-    /// Number of conversion candidates for explicit conversion (Space key)
+    /// Number of candidates for explicit conversion (Space, Tab, or Down)
     pub num_candidates: usize,
     /// Maximum context length to display
     pub display_context_len: usize,

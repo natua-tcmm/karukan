@@ -329,17 +329,16 @@ pub struct InputMethodEngine {
     live: LiveConversion,
     /// Auto-suggest candidates shown while still in Composing state.
     ///
-    /// Space still opens the explicit conversion list, but Tab/Down can walk this
-    /// composing-time list directly and Enter commits it after the user has
-    /// opted in by pressing Tab/Down.
+    /// Space, Tab, and Down open the explicit conversion list. This composing-time
+    /// list remains directly selectable through Up, the emoji picker, and clicks.
     composing_candidates: Option<CandidateList>,
-    /// Whether the user has explicitly selected a composing-time candidate with
-    /// Tab/Down. Enter only commits `composing_candidates` after this flag is set;
+    /// Whether the user has explicitly selected a composing-time candidate.
+    /// Enter only commits `composing_candidates` after this flag is set;
     /// otherwise Enter keeps the traditional "commit current preedit" behavior.
     composing_candidate_selected: bool,
     /// Whether composing candidates include a completed model result for the
     /// current reading. Cheap candidates shown while inference is pending must
-    /// not be reused as the final Space-conversion list.
+    /// not be reused as the final explicit-conversion list.
     composing_candidates_model_ready: bool,
     /// Internal chunking of the composing buffer used by
     /// `chunked_auto_suggest`: a cache of the per-chunk model conversions.
