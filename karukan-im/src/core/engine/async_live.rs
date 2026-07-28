@@ -6,14 +6,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use super::chunk::{
-    ChunkPlan, assemble_chunk_candidates, build_live_chunk_specs, group_chunks, is_japanese,
-    plan_live_chunk_reuse,
-};
-use super::live_dictionary::LiveUserDictionaryMatch;
+use super::ComposingChunk;
+use super::chunk::{ChunkPlan, assemble_chunk_candidates, group_chunks, is_japanese};
 use super::morphology::model_candidate_preserves_reading;
 use super::reading_correction::{interleave_model_candidates, zu_du_reading_variants};
-use super::{ComposingChunk, ComposingChunkKind};
 use karukan_engine::{KanaKanjiConverter, ModelCandidate};
 
 #[derive(Debug, Clone)]
@@ -26,7 +22,6 @@ pub(super) struct LiveInferenceRequest {
     pub chunk_len: usize,
     pub num_candidates: usize,
     pub old_chunks: Vec<ComposingChunk>,
-    pub user_matches: Vec<LiveUserDictionaryMatch>,
 }
 
 #[derive(Debug)]
@@ -226,14 +221,6 @@ fn convert_live(
     request: LiveInferenceRequest,
 ) -> LiveInferenceResult {
     let started = Instant::now();
-    if !request.user_matches.is_empty()
-        || request
-            .old_chunks
-            .iter()
-            .any(|chunk| chunk.kind == ComposingChunkKind::UserDictionary)
-    {
-        return convert_live_with_user_dictionary(converter, request, started);
-    }
     let text: Vec<char> = request.reading.chars().collect();
     let mut old = request.old_chunks;
     let old_lens: Vec<usize> = old.iter().map(|c| c.reading.chars().count()).collect();
@@ -250,12 +237,7 @@ fn convert_live(
     let trail_start = old.len() - plan.trail_count;
     for slice in group_chunks(&text[plan.mid_start..plan.mid_end], chunk_len) {
         let reading: String = slice.iter().collect();
-        let kind = if reading.chars().next().is_some_and(is_japanese) {
-            ComposingChunkKind::Model
-        } else {
-            ComposingChunkKind::Passthrough
-        };
-        let candidates = if kind == ComposingChunkKind::Model {
+        let candidates = if reading.chars().next().is_some_and(is_japanese) {
             let context = truncate_tail(
                 &format!("{}{}", request.base_context, combined),
                 request.max_context_len,
@@ -273,83 +255,11 @@ fn convert_live(
             reading,
             converted,
             candidates,
-            kind,
         });
     }
     for chunk in old.drain(trail_start..) {
         combined.push_str(&chunk.converted);
         chunks.push(chunk);
-    }
-
-    let current_chunk = chunk_index(&chunks, request.cursor_pos);
-    let mut candidates =
-        assemble_chunk_candidates(&chunks, current_chunk, request.num_candidates.max(1));
-    candidates.retain(|candidate| candidate != &request.reading);
-
-    LiveInferenceResult {
-        revision: request.revision,
-        reading: request.reading,
-        chunks,
-        candidates: (!candidates.is_empty()).then_some(candidates),
-        conversion_ms: started.elapsed().as_millis() as u64,
-    }
-}
-
-fn convert_live_with_user_dictionary(
-    converter: &KanaKanjiConverter,
-    request: LiveInferenceRequest,
-    started: Instant,
-) -> LiveInferenceResult {
-    let specs = build_live_chunk_specs(
-        &request.reading,
-        &request.user_matches,
-        request.chunk_len.max(1),
-    );
-    let old = request.old_chunks;
-    let reuse = plan_live_chunk_reuse(&old, &specs);
-    let mut chunks = Vec::with_capacity(specs.len());
-    let mut combined = String::new();
-
-    for chunk in old.iter().take(reuse.lead_count) {
-        combined.push_str(&chunk.converted);
-        chunks.push(chunk.clone());
-    }
-
-    let middle_end = specs.len() - reuse.trail_count;
-    for spec in &specs[reuse.lead_count..middle_end] {
-        let candidates = match spec.kind {
-            ComposingChunkKind::UserDictionary => spec.candidates.clone(),
-            ComposingChunkKind::Passthrough => vec![spec.reading.clone()],
-            ComposingChunkKind::Model => {
-                let context = truncate_tail(
-                    &format!("{}{}", request.base_context, combined),
-                    request.max_context_len,
-                );
-                live_candidate_texts(
-                    converter,
-                    &spec.reading,
-                    &context,
-                    request.num_candidates.max(1),
-                )
-            }
-        };
-        let converted = candidates
-            .first()
-            .cloned()
-            .unwrap_or_else(|| spec.reading.clone());
-        combined.push_str(&converted);
-        chunks.push(ComposingChunk {
-            reading: spec.reading.clone(),
-            converted,
-            candidates,
-            kind: spec.kind,
-        });
-    }
-
-    let old_trail_start = old.len() - reuse.trail_count;
-    for chunk in &old[old_trail_start..] {
-        combined.push_str(&chunk.converted);
-        chunks.push(chunk.clone());
     }
 
     let current_chunk = chunk_index(&chunks, request.cursor_pos);

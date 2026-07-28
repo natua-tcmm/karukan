@@ -154,17 +154,6 @@ pub(crate) enum InputMode {
 /// The left context (lctx) a chunk was converted with is *not* stored: it is
 /// just the editor surrounding text plus the `converted` text of the preceding
 /// chunks, so it is derived on demand in tests instead of duplicated here.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(in crate::core) enum ComposingChunkKind {
-    /// Kana/kanji inference is required for this chunk.
-    #[default]
-    Model,
-    /// Digits, symbols, and alphabet are copied without inference.
-    Passthrough,
-    /// The first user-dictionary surface is pinned without inference.
-    UserDictionary,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(in crate::core) struct ComposingChunk {
     /// Hiragana reading for this chunk (≤ N chars).
@@ -174,8 +163,6 @@ pub(in crate::core) struct ComposingChunk {
     pub converted: String,
     /// Model alternatives for this chunk, with `converted` first.
     pub candidates: Vec<String>,
-    /// How this chunk obtains its conversion.
-    pub kind: ComposingChunkKind,
 }
 
 /// Live conversion state: enabled flag and current converted text

@@ -10,138 +10,7 @@
 
 use tracing::debug;
 
-use super::live_dictionary::LiveUserDictionaryMatch;
 use super::*;
-
-/// Planned shape of one live-conversion chunk before inference/reuse.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct LiveChunkSpec {
-    pub reading: String,
-    pub kind: ComposingChunkKind,
-    /// Populated only for user-dictionary chunks.
-    pub candidates: Vec<String>,
-}
-
-/// Whole-chunk reuse around the changed portion of a planned live conversion.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct LiveChunkReusePlan {
-    pub lead_count: usize,
-    pub trail_count: usize,
-}
-
-fn spec_matches_chunk(spec: &LiveChunkSpec, chunk: &ComposingChunk) -> bool {
-    spec.reading == chunk.reading
-        && spec.kind == chunk.kind
-        && (spec.kind != ComposingChunkKind::UserDictionary || spec.candidates == chunk.candidates)
-}
-
-pub(super) fn plan_live_chunk_reuse(
-    old: &[ComposingChunk],
-    specs: &[LiveChunkSpec],
-) -> LiveChunkReusePlan {
-    let lead_count = old
-        .iter()
-        .zip(specs)
-        .take_while(|(chunk, spec)| spec_matches_chunk(spec, chunk))
-        .count();
-    let max_trailing = old.len().min(specs.len()).saturating_sub(lead_count);
-    let trail_count = old
-        .iter()
-        .rev()
-        .zip(specs.iter().rev())
-        .take(max_trailing)
-        .take_while(|(chunk, spec)| spec_matches_chunk(spec, chunk))
-        .count();
-    LiveChunkReusePlan {
-        lead_count,
-        trail_count,
-    }
-}
-
-fn push_plain_specs(specs: &mut Vec<LiveChunkSpec>, chars: &[char], max: usize) {
-    for slice in group_chunks(chars, max.max(1)) {
-        let reading: String = slice.iter().collect();
-        let kind = if slice.first().copied().is_some_and(is_japanese) {
-            ComposingChunkKind::Model
-        } else {
-            ComposingChunkKind::Passthrough
-        };
-        specs.push(LiveChunkSpec {
-            reading,
-            kind,
-            candidates: Vec::new(),
-        });
-    }
-}
-
-/// Partition a reading around pinned user-dictionary spans, then apply the
-/// ordinary Japanese/non-Japanese and length boundaries to the remaining gaps.
-pub(super) fn build_live_chunk_specs(
-    reading: &str,
-    matches: &[LiveUserDictionaryMatch],
-    max: usize,
-) -> Vec<LiveChunkSpec> {
-    let chars: Vec<char> = reading.chars().collect();
-    let mut specs = Vec::new();
-    let mut cursor = 0;
-    for matched in matches {
-        if matched.char_start > cursor {
-            push_plain_specs(&mut specs, &chars[cursor..matched.char_start], max);
-        }
-        specs.push(LiveChunkSpec {
-            reading: matched.reading.clone(),
-            kind: ComposingChunkKind::UserDictionary,
-            candidates: matched.candidates.clone(),
-        });
-        cursor = matched.char_end;
-    }
-    if cursor < chars.len() {
-        push_plain_specs(&mut specs, &chars[cursor..], max);
-    }
-    specs
-}
-
-fn unresolved_chunk(spec: &LiveChunkSpec) -> ComposingChunk {
-    let candidates = match spec.kind {
-        ComposingChunkKind::UserDictionary => spec.candidates.clone(),
-        ComposingChunkKind::Model | ComposingChunkKind::Passthrough => {
-            vec![spec.reading.clone()]
-        }
-    };
-    let converted = candidates
-        .first()
-        .cloned()
-        .unwrap_or_else(|| spec.reading.clone());
-    ComposingChunk {
-        reading: spec.reading.clone(),
-        converted,
-        candidates,
-        kind: spec.kind,
-    }
-}
-
-/// Build the immediate pre-inference view, retaining only chunks whose planned
-/// identity is unchanged and materializing dictionary/passthrough chunks now.
-pub(super) fn preview_live_chunks(
-    old: &[ComposingChunk],
-    specs: &[LiveChunkSpec],
-) -> Vec<ComposingChunk> {
-    let reuse = plan_live_chunk_reuse(old, specs);
-    specs
-        .iter()
-        .enumerate()
-        .map(|(index, spec)| {
-            if index < reuse.lead_count {
-                old[index].clone()
-            } else if index >= specs.len() - reuse.trail_count {
-                let old_index = old.len() - (specs.len() - index);
-                old[old_index].clone()
-            } else {
-                unresolved_chunk(spec)
-            }
-        })
-        .collect()
-}
 
 /// Number of leading chars shared by `a` and `b`.
 fn common_prefix_len(a: &[char], b: &[char]) -> usize {
@@ -347,39 +216,6 @@ impl ChunkPlan {
 }
 
 impl InputMethodEngine {
-    /// Immediate dictionary-aware chunks for the current reading. Unchanged AI
-    /// chunks are reused; new AI gaps remain raw until inference completes.
-    pub(super) fn preview_live_user_dictionary_chunks(
-        &self,
-        reading: &str,
-    ) -> Option<Vec<ComposingChunk>> {
-        let matches = self.live_user_dictionary_matches(reading);
-        if matches.is_empty() {
-            return None;
-        }
-        let specs = build_live_chunk_specs(reading, &matches, self.chunk_len());
-        Some(preview_live_chunks(&self.chunks, &specs))
-    }
-
-    pub(super) fn preview_live_user_dictionary_candidates(
-        &self,
-        reading: &str,
-        limit: usize,
-    ) -> Option<Vec<String>> {
-        let chunks = self.preview_live_user_dictionary_chunks(reading)?;
-        let pos = self.input_buf.cursor_pos.saturating_sub(1);
-        let mut end = 0;
-        let mut current = chunks.len().saturating_sub(1);
-        for (index, chunk) in chunks.iter().enumerate() {
-            end += chunk.reading.chars().count();
-            if pos < end {
-                current = index;
-                break;
-            }
-        }
-        Some(assemble_chunk_candidates(&chunks, current, limit.max(1)))
-    }
-
     /// Auto-suggest over the composing buffer, split into chunks of at most
     /// `config.composing_chunk_len` reading characters so each model call
     /// stays bounded for long input.
@@ -418,18 +254,10 @@ impl InputMethodEngine {
         let chunk_len = self.chunk_len();
         let text: Vec<char> = full_reading.chars().collect();
         let base_ctx = self.truncate_context_for_api();
-        let user_matches = self.live_user_dictionary_matches(&full_reading);
 
         // Previous chunking (covers the pre-edit text). Move it out so the
         // model calls below don't conflict with borrowing `self.chunks`.
         let mut old = std::mem::take(&mut self.chunks);
-        if !user_matches.is_empty()
-            || old
-                .iter()
-                .any(|chunk| chunk.kind == ComposingChunkKind::UserDictionary)
-        {
-            return self.chunked_user_dictionary_suggest(full_reading, user_matches, base_ctx, old);
-        }
         let old_lens: Vec<usize> = old.iter().map(|s| s.reading.chars().count()).collect();
         let old_text: Vec<char> = old.iter().flat_map(|s| s.reading.chars()).collect();
 
@@ -486,67 +314,6 @@ impl InputMethodEngine {
         (!candidates.is_empty()).then_some(candidates)
     }
 
-    fn chunked_user_dictionary_suggest(
-        &mut self,
-        full_reading: String,
-        user_matches: Vec<LiveUserDictionaryMatch>,
-        base_ctx: String,
-        old: Vec<ComposingChunk>,
-    ) -> Option<Vec<String>> {
-        let specs = build_live_chunk_specs(&full_reading, &user_matches, self.chunk_len());
-        let reuse = plan_live_chunk_reuse(&old, &specs);
-        let mut chunks = Vec::with_capacity(specs.len());
-        let mut combined = String::new();
-
-        for chunk in old.iter().take(reuse.lead_count) {
-            combined.push_str(&chunk.converted);
-            chunks.push(chunk.clone());
-        }
-
-        let middle_end = specs.len() - reuse.trail_count;
-        for spec in &specs[reuse.lead_count..middle_end] {
-            let candidates = match spec.kind {
-                ComposingChunkKind::UserDictionary => spec.candidates.clone(),
-                ComposingChunkKind::Passthrough => vec![spec.reading.clone()],
-                ComposingChunkKind::Model => {
-                    let lctx = self.lctx_for(&base_ctx, &combined);
-                    self.convert_chunk_candidates(&spec.reading, &lctx)
-                }
-            };
-            let converted = candidates
-                .first()
-                .cloned()
-                .unwrap_or_else(|| spec.reading.clone());
-            combined.push_str(&converted);
-            chunks.push(ComposingChunk {
-                reading: spec.reading.clone(),
-                converted,
-                candidates,
-                kind: spec.kind,
-            });
-        }
-
-        let old_trail_start = old.len() - reuse.trail_count;
-        for chunk in &old[old_trail_start..] {
-            combined.push_str(&chunk.converted);
-            chunks.push(chunk.clone());
-        }
-
-        self.chunks = chunks;
-        self.log_chunk_state("convert-user-dictionary");
-        let current_chunk = self.current_chunk_index();
-        let candidate_limit = live_candidate_pool_limit(
-            self.live.enabled,
-            self.input_mode,
-            &full_reading,
-            self.config.live_num_candidates,
-        );
-        let mut candidates =
-            assemble_chunk_candidates(&self.chunks, current_chunk, candidate_limit);
-        candidates.retain(|candidate| candidate != &full_reading);
-        (!candidates.is_empty()).then_some(candidates)
-    }
-
     /// Build one freshly-converted chunk for `reading`, whose left context is
     /// `base_ctx` plus everything converted so far (`combined`). A non-Japanese
     /// reading (digits / symbols / alphabet) is passed through verbatim — never
@@ -559,12 +326,7 @@ impl InputMethodEngine {
         base_ctx: &str,
         combined: &str,
     ) -> ComposingChunk {
-        let kind = if reading.chars().next().is_some_and(is_japanese) {
-            ComposingChunkKind::Model
-        } else {
-            ComposingChunkKind::Passthrough
-        };
-        let candidates = if kind == ComposingChunkKind::Model {
+        let candidates = if reading.chars().next().is_some_and(is_japanese) {
             let lctx = self.lctx_for(base_ctx, combined);
             self.convert_chunk_candidates(&reading, &lctx)
         } else {
@@ -578,7 +340,6 @@ impl InputMethodEngine {
             reading,
             converted,
             candidates,
-            kind,
         }
     }
 
@@ -764,10 +525,7 @@ mod group_chunk_tests {
 
 #[cfg(test)]
 mod candidate_tests {
-    use super::{
-        ComposingChunk, ComposingChunkKind, LiveUserDictionaryMatch, assemble_chunk_candidates,
-        build_live_chunk_specs, preview_live_chunks,
-    };
+    use super::{ComposingChunk, assemble_chunk_candidates};
 
     fn chunk(reading: &str, converted: &str, candidates: &[&str]) -> ComposingChunk {
         ComposingChunk {
@@ -777,7 +535,6 @@ mod candidate_tests {
                 .iter()
                 .map(|candidate| candidate.to_string())
                 .collect(),
-            kind: ComposingChunkKind::Model,
         }
     }
 
@@ -812,28 +569,6 @@ mod candidate_tests {
         let chunks = vec![chunk("きょう", "今日", &["今日", "今日", "京", "強"])];
 
         assert_eq!(assemble_chunk_candidates(&chunks, 0, 2), vec!["今日", "京"]);
-    }
-
-    #[test]
-    fn dictionary_preview_reuses_unchanged_model_prefix() {
-        let old = vec![chunk("あい", "愛", &["愛", "藍"])];
-        let matches = vec![LiveUserDictionaryMatch {
-            char_start: 2,
-            char_end: 6,
-            reading: "かるかん".to_string(),
-            candidates: vec!["karukan".to_string(), "軽羹".to_string()],
-        }];
-        let specs = build_live_chunk_specs("あいかるかん", &matches, 30);
-        let preview = preview_live_chunks(&old, &specs);
-
-        assert_eq!(preview[0].converted, "愛");
-        assert_eq!(preview[0].kind, ComposingChunkKind::Model);
-        assert_eq!(preview[1].converted, "karukan");
-        assert_eq!(preview[1].kind, ComposingChunkKind::UserDictionary);
-        assert_eq!(
-            assemble_chunk_candidates(&preview, 1, 3),
-            ["愛karukan", "愛軽羹", "藍karukan"]
-        );
     }
 }
 
