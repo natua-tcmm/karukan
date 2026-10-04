@@ -28,8 +28,8 @@ fn common_suffix_len(a: &[char], b: &[char], prefix_len: usize) -> usize {
     n
 }
 
-/// Whether `c` is "Japanese": hiragana, katakana (including the prolonged
-/// sound mark `ー`), or a CJK ideograph (kanji).
+/// Whether `c` should be converted: hiragana, katakana (except `・` and `ー`),
+/// or a CJK ideograph (kanji).
 ///
 /// Everything else — ASCII / full-width digits, letters, and symbols, plus all
 /// punctuation — is non-Japanese. Chunking only ever asks this one question:
@@ -39,19 +39,16 @@ fn common_suffix_len(a: &[char], b: &[char], prefix_len: usize) -> usize {
 /// is non-Japanese it naturally separates clauses — `今日は。明日` chunks as
 /// `今日は` / `。` / `明日` — so no separate punctuation rule is needed.
 ///
-/// The middle dot `・` (U+30FB) sits in the katakana block but is a separator
-/// symbol, so it is special-cased as non-Japanese: `ジョン・スミス` splits into
-/// `ジョン` / `・` / `スミス` with the `・` passed through verbatim. A katakana
-/// word like `スーパーマーケット` has no `・` and is entirely Japanese (the `ー`
-/// stays Japanese), so it remains one chunk.
+/// The middle dot `・` and prolonged sound mark `ー` sit in the katakana block
+/// but are passed through verbatim. `スーパー` splits into `ス` / `ー` / `パ` /
+/// `ー`, preserving each prolonged mark instead of sending it to the model.
 pub(super) fn is_japanese(c: char) -> bool {
-    // 中黒 (・): a katakana-block separator, treated as a non-Japanese symbol.
-    if c == '\u{30FB}' {
+    if matches!(c, '・' | 'ー') {
         return false;
     }
     matches!(c,
         '\u{3040}'..='\u{309F}'   // hiragana
-        | '\u{30A0}'..='\u{30FF}' // katakana (incl. ー U+30FC)
+        | '\u{30A0}'..='\u{30FF}' // katakana (except ・ and ー above)
         | '\u{3400}'..='\u{9FFF}' // CJK ideographs (kanji)
     )
 }
@@ -500,10 +497,13 @@ mod group_chunk_tests {
     }
 
     #[test]
-    fn katakana_word_with_prolonged_mark_stays_together() {
-        // `ー` (U+30FC) lives in the katakana block, so a katakana word is one
-        // Japanese chunk and is never split off as a symbol.
-        assert_eq!(split("スーパーマーケット", 40), vec!["スーパーマーケット"]);
+    fn prolonged_marks_are_passed_through_separately() {
+        assert_eq!(split("ー", 40), vec!["ー"]);
+        assert_eq!(split("あーーいー", 40), vec!["あ", "ーー", "い", "ー"]);
+        assert_eq!(
+            split("スーパーマーケット", 40),
+            vec!["ス", "ー", "パ", "ー", "マ", "ー", "ケット"]
+        );
     }
 
     #[test]
@@ -513,12 +513,11 @@ mod group_chunk_tests {
 
     #[test]
     fn middle_dot_is_a_non_japanese_separator() {
-        // 中黒 ・ (U+30FB) is special-cased as a symbol, so it splits the
-        // katakana around it — while the prolonged mark ー stays Japanese.
+        // Both middle dots and prolonged marks pass through verbatim.
         assert_eq!(split("ジョン・スミス", 40), vec!["ジョン", "・", "スミス"]);
         assert_eq!(
             split("スーパー・マーケット", 40),
-            vec!["スーパー", "・", "マーケット"]
+            vec!["ス", "ー", "パ", "ー・", "マ", "ー", "ケット"]
         );
     }
 }

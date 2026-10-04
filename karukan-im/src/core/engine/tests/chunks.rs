@@ -85,15 +85,46 @@ fn test_non_japanese_chunk_passes_through_and_reuses_japanese() {
 }
 
 #[test]
-fn test_katakana_word_with_prolonged_mark_stays_one_chunk() {
-    // スーパーマーケット contains the prolonged sound mark ー but is all
-    // Japanese, so it must NOT be split into latin chunks.
+fn test_prolonged_marks_are_passed_through_in_katakana_words() {
     let mut engine = make_chunk_engine(40);
     engine.input_buf.clear();
     engine.input_buf.insert("スーパーマーケット");
     engine.chunked_auto_suggest();
     let readings: Vec<&str> = engine.chunks.iter().map(|c| c.reading.as_str()).collect();
-    assert_eq!(readings, vec!["スーパーマーケット"]);
+    assert_eq!(readings, vec!["ス", "ー", "パ", "ー", "マ", "ー", "ケット"]);
+    for chunk in engine.chunks.iter().filter(|chunk| chunk.reading == "ー") {
+        assert_eq!(chunk.converted, "ー");
+        assert_eq!(chunk.candidates, ["ー"]);
+    }
+}
+
+#[test]
+fn test_typed_prolonged_mark_preserves_cached_live_conversion() {
+    let mut engine = make_live_conversion_engine();
+    for key in "nande".chars() {
+        engine.process_key(&press(key));
+    }
+    engine.chunks[0].converted = "何で".to_string();
+    engine.chunks[0].candidates = vec!["何で".to_string()];
+
+    engine.process_key(&press('-'));
+    assert_eq!(engine.preedit().unwrap().text(), "何でー");
+    assert_eq!(engine.chunks[0].converted, "何で");
+    assert_eq!(engine.chunks[1].reading, "ー");
+    assert_eq!(engine.chunks[1].candidates, ["ー"]);
+    assert_eq!(engine.commit(), "何でー");
+}
+
+#[test]
+fn test_standalone_prolonged_marks_stay_literal() {
+    let mut engine = make_live_conversion_engine();
+    for key in "---".chars() {
+        engine.process_key(&press(key));
+    }
+    assert_eq!(engine.preedit().unwrap().text(), "ーーー");
+    assert_eq!(engine.chunks.len(), 1);
+    assert_eq!(engine.chunks[0].candidates, ["ーーー"]);
+    assert_eq!(engine.commit(), "ーーー");
 }
 
 #[test]

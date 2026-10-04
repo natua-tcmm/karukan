@@ -808,7 +808,7 @@ impl InputMethodEngine {
         &mut self,
         candidates: CandidateList,
     ) -> EngineResult {
-        let selected_text = candidates.selected_text().unwrap_or("").to_string();
+        let selected_text = self.preserve_pending_w(candidates.selected_text().unwrap_or(""));
         self.composing_candidates = Some(candidates.clone());
 
         let mut preedit = Preedit::with_text(&selected_text);
@@ -857,7 +857,7 @@ impl InputMethodEngine {
             return None;
         }
         let candidates = self.composing_candidates.as_ref()?;
-        let text = candidates.selected_text()?.to_string();
+        let text = self.preserve_pending_w(candidates.selected_text()?);
         self.record_selected_composing_correction();
 
         self.invalidate_live_results();
@@ -919,6 +919,7 @@ impl InputMethodEngine {
         }
 
         self.invalidate_live_results();
+        let live_text = self.preserve_pending_w(&self.live.text);
         // Flush any pending romaji into composed_hiragana
         self.flush_romaji_to_composed();
 
@@ -935,7 +936,7 @@ impl InputMethodEngine {
             karukan_engine::hiragana_to_katakana(&reading)
         } else if !self.live.text.is_empty() {
             // Live conversion active: commit converted text
-            self.live.text.clone()
+            live_text
         } else {
             reading.clone()
         };

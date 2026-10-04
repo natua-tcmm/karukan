@@ -3,6 +3,20 @@
 use super::*;
 
 impl InputMethodEngine {
+    /// A final pending `w` is literal laughter when accepting live conversion.
+    /// Keep it buffered while typing so `wa` / `wi` / `we` / `wo` still work.
+    pub(super) fn preserve_pending_w(&self, surface: &str) -> String {
+        if self.live.enabled
+            && self.input_mode == InputMode::Hiragana
+            && self.input_buf.cursor_pos == self.input_buf.text.chars().count()
+            && self.converters.romaji.buffer() == "w"
+        {
+            format!("{surface}w")
+        } else {
+            surface.to_string()
+        }
+    }
+
     /// Build display text from the input buffer and romaji buffer
     /// Format: composed[:cursor] + romaji_buffer + composed[cursor:]
     /// In katakana mode, the composed parts are converted to katakana.

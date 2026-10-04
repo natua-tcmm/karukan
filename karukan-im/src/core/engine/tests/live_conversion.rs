@@ -1,5 +1,101 @@
 use super::*;
 
+fn engine_with_pending_laughter(romaji: &str) -> InputMethodEngine {
+    let mut engine = make_live_conversion_engine();
+    for key in "nande".chars() {
+        engine.process_key(&press(key));
+    }
+    engine.chunks[0].converted = "何で".to_string();
+    engine.chunks[0].candidates = vec!["何で".to_string()];
+    for key in romaji.chars() {
+        engine.process_key(&press(key));
+    }
+    engine
+}
+
+#[test]
+fn live_conversion_keeps_trailing_w_on_enter_and_api_commit() {
+    for suffix in ["w", "ww", "www"] {
+        for use_api in [false, true] {
+            let mut engine = engine_with_pending_laughter(suffix);
+            let expected = format!("何で{suffix}");
+            assert_eq!(engine.preedit().unwrap().text(), expected);
+            let committed = if use_api {
+                engine.commit()
+            } else {
+                engine
+                    .process_key(&press_key(Keysym::RETURN))
+                    .actions
+                    .into_iter()
+                    .find_map(|action| match action {
+                        EngineAction::Commit(text) => Some(text),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            assert_eq!(committed, expected);
+            assert!(matches!(engine.state(), InputState::Empty));
+        }
+    }
+}
+
+#[test]
+fn live_candidate_selection_keeps_pending_w_in_preedit_and_commit() {
+    let mut engine = engine_with_pending_laughter("w");
+    engine.process_key(&press_key(Keysym::UP));
+    assert_eq!(engine.preedit().unwrap().text(), "何でw");
+    let result = engine.process_key(&press_key(Keysym::RETURN));
+    assert!(
+        result
+            .actions
+            .iter()
+            .any(|action| { matches!(action, EngineAction::Commit(text) if text == "何でw") })
+    );
+}
+
+#[test]
+fn explicit_conversion_keeps_the_live_surface_with_pending_w() {
+    let mut engine = engine_with_pending_laughter("w");
+    engine.process_key(&press_key(Keysym::SPACE));
+    let InputState::Conversion { session } = engine.state() else {
+        panic!("Space should enter conversion");
+    };
+    assert_eq!(session.reading, "なんでw");
+    assert_eq!(session.segments[0].candidates.candidates()[0].text, "何でw");
+}
+
+#[test]
+fn pending_w_can_still_be_completed_as_romaji_or_deleted() {
+    for (vowel, kana) in [('a', "わ"), ('i', "うぃ"), ('e', "うぇ"), ('o', "を")] {
+        let mut engine = engine_with_pending_laughter("w");
+        assert_eq!(engine.converters.romaji.buffer(), "w");
+        engine.process_key(&press(vowel));
+        assert_eq!(engine.input_buf.text, format!("なんで{kana}"));
+        assert!(engine.converters.romaji.buffer().is_empty());
+    }
+    let mut engine = engine_with_pending_laughter("w");
+    engine.process_key(&press_key(Keysym::BACKSPACE));
+    assert_eq!(engine.input_buf.text, "なんで");
+    assert!(engine.converters.romaji.buffer().is_empty());
+    assert_eq!(engine.commit(), "なんで");
+}
+
+#[test]
+fn segmented_conversion_from_composing_keeps_pending_w() {
+    let mut engine = engine_with_pending_laughter("w");
+    engine.process_key(&press_key(Keysym::UP));
+    engine.start_segmented_conversion_from_composing();
+    assert_eq!(engine.preedit().unwrap().text(), "何でw");
+    assert_eq!(engine.commit(), "何でw");
+}
+
+#[test]
+fn other_pending_consonants_keep_existing_live_commit_behavior() {
+    let mut engine = engine_with_pending_laughter("k");
+    assert_eq!(engine.preedit().unwrap().text(), "何でk");
+    assert_eq!(engine.commit(), "何で");
+}
+
 // --- Live conversion tests ---
 
 #[test]

@@ -722,6 +722,7 @@ impl InputMethodEngine {
         match &self.state {
             InputState::Empty => String::new(),
             InputState::Composing { .. } => {
+                let live_text = self.preserve_pending_w(&self.live.text);
                 // Flush romaji buffer into composed_hiragana
                 self.flush_romaji_to_composed();
                 let reading = self.input_buf.text.clone();
@@ -734,7 +735,7 @@ impl InputMethodEngine {
                         .or_else(|| self.first_emoji_candidate(&reading))
                         .unwrap_or_else(|| reading.clone())
                 } else if !self.live.text.is_empty() {
-                    self.live.text.clone()
+                    live_text
                 } else {
                     reading.clone()
                 };

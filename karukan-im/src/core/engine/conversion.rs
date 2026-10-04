@@ -287,6 +287,9 @@ impl InputMethodEngine {
     /// the learning-free branch; the normal key path keeps learning included.
     pub(super) fn start_conversion(&mut self, skip_learning: bool) -> EngineResult {
         self.invalidate_live_results();
+        if !self.live.text.is_empty() {
+            self.live.text = self.preserve_pending_w(&self.live.text);
+        }
         let composing_reading = self.input_buf.text.clone();
         let composing_candidates = self.composing_candidates.clone();
         let composing_candidates_model_ready = self.composing_candidates_model_ready;
@@ -386,14 +389,19 @@ impl InputMethodEngine {
     /// correction directly.
     pub(super) fn start_segmented_conversion_from_composing(&mut self) -> EngineResult {
         self.invalidate_live_results();
+        let fallback_candidates = self.composing_candidates.as_ref().map(|candidates| {
+            let mut values = candidates.candidates().to_vec();
+            for candidate in &mut values {
+                candidate.text = self.preserve_pending_w(&candidate.text);
+            }
+            CandidateList::new(values)
+        });
         self.flush_romaji_to_composed();
         let reading = self.input_buf.text.clone();
         if reading.is_empty() {
             return EngineResult::consumed();
         }
-        let fallback_candidates = self
-            .composing_candidates
-            .clone()
+        let fallback_candidates = fallback_candidates
             .unwrap_or_else(|| CandidateList::from_strings_with_reading([&reading], &reading));
 
         self.converters.romaji.reset();
