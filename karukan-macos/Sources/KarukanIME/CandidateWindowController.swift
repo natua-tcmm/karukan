@@ -4,7 +4,8 @@ import Cocoa
 ///
 /// The engine pre-paginates: `show` receives only the visible page plus
 /// page metadata, so this controller just renders rows. An optional aux
-/// line (reading hint / model info from the engine) is shown as a footer.
+/// line (reading hint / model info from the engine) is shown on the edge
+/// nearest the input field.
 class CandidateWindowController {
     // Visual scale of the panel. Candidate rows use a larger type size
     // than the footers (page indicator / aux line), matching the system
@@ -44,7 +45,7 @@ class CandidateWindowController {
         stackView.orientation = .vertical
         stackView.alignment = .leading
         stackView.spacing = 4
-        stackView.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        stackView.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         panel.contentView?.addSubview(stackView)
@@ -72,7 +73,7 @@ class CandidateWindowController {
         render(cursorRect: cursorRect)
     }
 
-    /// Update the aux footer; re-renders in place if the window is visible.
+    /// Update the aux preview; re-renders in place if the window is visible.
     /// Pass `deferRender: true` when a `show`/`hide` follows in the same
     /// action batch, so the panel is rendered once per batch instead of
     /// once for the aux change and again for the candidates.
@@ -102,11 +103,9 @@ class CandidateWindowController {
         if state.totalPages > 1 {
             addFooterLabel("[\(state.page + 1)/\(state.totalPages)]")
         }
-        if let aux = auxText, !aux.isEmpty {
-            addFooterLabel(aux)
-        }
+        let auxLabel = auxText.flatMap { $0.isEmpty ? nil : addFooterLabel($0) }
 
-        positionPanel(cursorRect: cursorRect)
+        positionPanel(cursorRect: cursorRect, auxLabel: auxLabel)
     }
 
     private func clearRows() {
@@ -158,18 +157,20 @@ class CandidateWindowController {
         onSelect?(sender.tag)
     }
 
-    private func addFooterLabel(_ text: String) {
+    @discardableResult
+    private func addFooterLabel(_ text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = NSFont.systemFont(ofSize: Self.footerFontSize)
         label.textColor = NSColor.secondaryLabelColor
         label.translatesAutoresizingMaskIntoConstraints = false
         stackView.addArrangedSubview(label)
         rowViews.append(label)
+        return label
     }
 
     private var lastCursorRect: NSRect = .zero
 
-    private func positionPanel(cursorRect: NSRect?) {
+    private func positionPanel(cursorRect: NSRect?, auxLabel: NSTextField?) {
         if let rect = cursorRect {
             lastCursorRect = rect
         }
@@ -178,22 +179,30 @@ class CandidateWindowController {
         stackView.layoutSubtreeIfNeeded()
         let contentSize = stackView.fittingSize
         let panelWidth = max(contentSize.width + 16, Self.minPanelWidth)
-        let panelHeight = contentSize.height + 8
+        let panelHeight = contentSize.height
+
+        // Flip above the cursor when the panel would fall off the bottom of
+        // the screen.
+        let showAbove: Bool
+        if cursorRect != .zero, let screen = NSScreen.main {
+            showAbove = cursorRect.origin.y - panelHeight < screen.visibleFrame.origin.y
+        } else {
+            showAbove = false
+        }
+
+        // Keep the reading preview closest to the input field: at the
+        // bottom above the cursor, and at the top below it. Reordering
+        // doesn't change the fitting size used to decide placement.
+        if !showAbove, let auxLabel {
+            stackView.removeArrangedSubview(auxLabel)
+            stackView.insertArrangedSubview(auxLabel, at: 0)
+        }
 
         guard cursorRect != .zero else {
             panel.setFrame(
                 NSRect(x: 100, y: 100, width: panelWidth, height: panelHeight), display: true)
             panel.orderFront(nil)
             return
-        }
-
-        // Flip above the cursor when the panel would fall off the bottom of
-        // the screen.
-        let showAbove: Bool
-        if let screen = NSScreen.main {
-            showAbove = cursorRect.origin.y - panelHeight < screen.visibleFrame.origin.y
-        } else {
-            showAbove = false
         }
 
         let originY: CGFloat
