@@ -28,7 +28,7 @@ fn common_suffix_len(a: &[char], b: &[char], prefix_len: usize) -> usize {
     n
 }
 
-/// Whether `c` should be converted: hiragana, katakana (except `・` and `ー`),
+/// Whether `c` should be converted: hiragana, katakana (except `・`),
 /// or a CJK ideograph (kanji).
 ///
 /// Everything else — ASCII / full-width digits, letters, and symbols, plus all
@@ -39,16 +39,16 @@ fn common_suffix_len(a: &[char], b: &[char], prefix_len: usize) -> usize {
 /// is non-Japanese it naturally separates clauses — `今日は。明日` chunks as
 /// `今日は` / `。` / `明日` — so no separate punctuation rule is needed.
 ///
-/// The middle dot `・` and prolonged sound mark `ー` sit in the katakana block
-/// but are passed through verbatim. `スーパー` splits into `ス` / `ー` / `パ` /
-/// `ー`, preserving each prolonged mark instead of sending it to the model.
+/// The middle dot `・` is passed through verbatim. The prolonged sound mark
+/// `ー` belongs to the Japanese run so words such as `スーパー` reach the
+/// model together, subject to the usual chunk length cap.
 pub(super) fn is_japanese(c: char) -> bool {
-    if matches!(c, '・' | 'ー') {
+    if c == '・' {
         return false;
     }
     matches!(c,
         '\u{3040}'..='\u{309F}'   // hiragana
-        | '\u{30A0}'..='\u{30FF}' // katakana (except ・ and ー above)
+        | '\u{30A0}'..='\u{30FF}' // katakana (except ・ above)
         | '\u{3400}'..='\u{9FFF}' // CJK ideographs (kanji)
     )
 }
@@ -497,13 +497,12 @@ mod group_chunk_tests {
     }
 
     #[test]
-    fn prolonged_marks_are_passed_through_separately() {
+    fn prolonged_marks_stay_in_the_japanese_run() {
         assert_eq!(split("ー", 40), vec!["ー"]);
-        assert_eq!(split("あーーいー", 40), vec!["あ", "ーー", "い", "ー"]);
-        assert_eq!(
-            split("スーパーマーケット", 40),
-            vec!["ス", "ー", "パ", "ー", "マ", "ー", "ケット"]
-        );
+        assert_eq!(split("あーーいー", 40), vec!["あーーいー"]);
+        assert_eq!(split("かーどをどろーする", 40), vec!["かーどをどろーする"]);
+        assert_eq!(split("スーパーマーケット", 40), vec!["スーパーマーケット"]);
+        assert_eq!(split("かーど", 2), vec!["かー", "ど"]);
     }
 
     #[test]
@@ -513,11 +512,11 @@ mod group_chunk_tests {
 
     #[test]
     fn middle_dot_is_a_non_japanese_separator() {
-        // Both middle dots and prolonged marks pass through verbatim.
+        // Middle dots pass through; prolonged marks remain part of each word.
         assert_eq!(split("ジョン・スミス", 40), vec!["ジョン", "・", "スミス"]);
         assert_eq!(
             split("スーパー・マーケット", 40),
-            vec!["ス", "ー", "パ", "ー・", "マ", "ー", "ケット"]
+            vec!["スーパー", "・", "マーケット"]
         );
     }
 }
