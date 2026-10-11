@@ -7,7 +7,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use super::ComposingChunk;
-use super::chunk::{ChunkPlan, assemble_chunk_candidates, group_chunks, is_japanese};
+use super::chunk::{ChunkPlan, assemble_chunk_candidates, group_chunks_with_prefix, is_japanese};
 use super::morphology::model_candidate_preserves_reading;
 use super::reading_correction::{interleave_model_candidates, zu_du_reading_variants};
 use karukan_engine::{KanaKanjiConverter, ModelCandidate};
@@ -116,6 +116,25 @@ impl InferenceWorker {
         receiver.recv().unwrap_or_default()
     }
 
+    /// Queue segment alternatives without blocking the key-handling thread.
+    pub(super) fn convert_async(
+        &self,
+        reading: &str,
+        context: &str,
+        num_candidates: usize,
+    ) -> Receiver<Vec<ModelCandidate>> {
+        let (response, receiver) = mpsc::channel();
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.blocking.push_back(BlockingJob::Convert {
+            reading: reading.to_string(),
+            context: context.to_string(),
+            num_candidates,
+            response,
+        });
+        self.shared.wake.notify_one();
+        receiver
+    }
+
     /// Drain completed results and return only the newest one.
     pub(super) fn poll_latest(&self) -> Option<LiveInferenceResult> {
         let mut latest = None;
@@ -168,9 +187,24 @@ fn worker_loop(
                 num_candidates,
                 response,
             }) => {
-                let result = converter
-                    .convert_scored(&reading, &context, num_candidates.max(1))
-                    .unwrap_or_default();
+                let prefix: String = reading.chars().take_while(|&ch| ch == 'ー').collect();
+                let suffix = &reading[prefix.len()..];
+                let result = if suffix.is_empty() {
+                    vec![ModelCandidate {
+                        text: reading.clone(),
+                        score: None,
+                    }]
+                } else {
+                    converter
+                        .convert_scored(suffix, &context, num_candidates.max(1))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|mut candidate| {
+                            candidate.text = format!("{prefix}{}", candidate.text);
+                            candidate
+                        })
+                        .collect()
+                };
                 let _ = response.send(result);
             }
             WorkerJob::Live(request) => {
@@ -220,9 +254,27 @@ fn convert_live(
     converter: &KanaKanjiConverter,
     request: LiveInferenceRequest,
 ) -> LiveInferenceResult {
+    convert_live_with(request, |reading, context, count| {
+        live_candidate_texts(converter, reading, context, count)
+    })
+}
+
+fn convert_live_with(
+    request: LiveInferenceRequest,
+    mut infer: impl FnMut(&str, &str, usize) -> Vec<String>,
+) -> LiveInferenceResult {
     let started = Instant::now();
     let text: Vec<char> = request.reading.chars().collect();
     let mut old = request.old_chunks;
+    let old_prefix = old
+        .iter()
+        .flat_map(|chunk| chunk.reading.chars())
+        .take_while(|ch| *ch == 'ー')
+        .count();
+    let literal_prefix = text.iter().take_while(|&&ch| ch == 'ー').count();
+    if old_prefix != literal_prefix {
+        old.clear();
+    }
     let old_lens: Vec<usize> = old.iter().map(|c| c.reading.chars().count()).collect();
     let old_text: Vec<char> = old.iter().flat_map(|c| c.reading.chars()).collect();
     let chunk_len = request.chunk_len.max(1);
@@ -235,14 +287,21 @@ fn convert_live(
         chunks.push(chunk);
     }
     let trail_start = old.len() - plan.trail_count;
-    for slice in group_chunks(&text[plan.mid_start..plan.mid_end], chunk_len) {
+    for slice in group_chunks_with_prefix(
+        &text[plan.mid_start..plan.mid_end],
+        chunk_len,
+        literal_prefix.saturating_sub(plan.mid_start),
+    ) {
         let reading: String = slice.iter().collect();
-        let candidates = if reading.chars().next().is_some_and(is_japanese) {
+        let literal_leading_mark =
+            combined.chars().all(|ch| ch == 'ー') && reading.chars().all(|ch| ch == 'ー');
+        let candidates = if !literal_leading_mark && reading.chars().next().is_some_and(is_japanese)
+        {
             let context = truncate_tail(
                 &format!("{}{}", request.base_context, combined),
                 request.max_context_len,
             );
-            live_candidate_texts(converter, &reading, &context, request.num_candidates.max(1))
+            infer(&reading, &context, request.num_candidates.max(1))
         } else {
             vec![reading.clone()]
         };
@@ -296,6 +355,115 @@ fn chunk_index(chunks: &[ComposingChunk], cursor_pos: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leading_prolonged_marks_are_never_sent_to_inference() {
+        let request = LiveInferenceRequest {
+            revision: 1,
+            reading: "ーーすーぱー".into(),
+            cursor_pos: 6,
+            base_context: String::new(),
+            max_context_len: 10,
+            chunk_len: 30,
+            num_candidates: 3,
+            old_chunks: Vec::new(),
+        };
+        let mut inputs = Vec::new();
+        let result = convert_live_with(request, |reading, _, _| {
+            inputs.push(reading.to_string());
+            vec!["スーパー".into()]
+        });
+        assert_eq!(inputs, ["すーぱー"]);
+        assert_eq!(
+            result
+                .chunks
+                .iter()
+                .map(|chunk| chunk.converted.as_str())
+                .collect::<String>(),
+            "ーースーパー"
+        );
+        assert!(
+            result
+                .candidates
+                .unwrap()
+                .iter()
+                .all(|candidate| candidate.starts_with("ーー"))
+        );
+    }
+
+    #[test]
+    fn isolated_leading_prolonged_mark_does_not_run_inference() {
+        let request = LiveInferenceRequest {
+            revision: 1,
+            reading: "ーー".into(),
+            cursor_pos: 2,
+            base_context: String::new(),
+            max_context_len: 10,
+            chunk_len: 1,
+            num_candidates: 3,
+            old_chunks: Vec::new(),
+        };
+        let result = convert_live_with(request, |_, _, _| panic!("literal mark reached model"));
+        assert_eq!(
+            result
+                .chunks
+                .iter()
+                .map(|chunk| chunk.converted.as_str())
+                .collect::<String>(),
+            "ーー"
+        );
+    }
+
+    #[test]
+    fn extending_literal_prefix_across_chunk_cap_keeps_it_out_of_inference() {
+        let prefix = "ー".repeat(30);
+        let request = LiveInferenceRequest {
+            revision: 2,
+            reading: format!("{prefix}ーすーぱー"),
+            cursor_pos: 35,
+            base_context: String::new(),
+            max_context_len: 10,
+            chunk_len: 30,
+            num_candidates: 3,
+            old_chunks: vec![ComposingChunk {
+                reading: prefix.clone(),
+                converted: prefix.clone(),
+                candidates: vec![prefix.clone()],
+            }],
+        };
+        let mut inputs = Vec::new();
+        let result = convert_live_with(request, |reading, _, _| {
+            inputs.push(reading.to_string());
+            vec!["スーパー".into()]
+        });
+        assert_eq!(inputs, ["すーぱー"]);
+        assert_eq!(
+            result
+                .chunks
+                .iter()
+                .map(|chunk| chunk.converted.as_str())
+                .collect::<String>(),
+            format!("{prefix}ースーパー")
+        );
+    }
+
+    #[test]
+    fn model_control_and_internal_tokens_are_not_live_candidates() {
+        for text in [
+            "東京\u{EE00}",
+            "東京\u{EE01}",
+            "東京\u{EE02}",
+            "東京\u{F701}",
+            "東京\u{1b}",
+            "東京\n駅",
+        ] {
+            let candidates = validated_live_candidate_texts_for_test(
+                "とうきょう",
+                vec![model_candidate(text), model_candidate("東京")],
+            );
+            assert_eq!(candidates, ["東京"]);
+        }
+    }
 
     fn model_candidate(text: &str) -> ModelCandidate {
         ModelCandidate {

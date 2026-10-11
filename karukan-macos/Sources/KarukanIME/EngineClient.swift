@@ -75,14 +75,6 @@ class EngineClient {
         keyResultSync(method: "commit", params: [:], timeout: 1.0)
     }
 
-    func selectCandidateSync(pageIndex: Int) -> KeyResult? {
-        keyResultSync(
-            method: "select_candidate",
-            params: ["page_index": pageIndex],
-            timeout: 1.0
-        )
-    }
-
     func saveLearningAsync() {
         sendRequest(method: "save_learning", params: [:]) { _ in }
     }

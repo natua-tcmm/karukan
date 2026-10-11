@@ -192,6 +192,8 @@ fn exhausting_one_token_whole_candidates_enters_segmented_conversion() {
     engine.process_key(&press_key(Keysym::SPACE));
     engine.process_key(&press_key(Keysym::SPACE));
 
+    finish_segment_preparation(&mut engine);
+
     let InputState::Conversion { session } = engine.state() else {
         panic!("segmented conversion expected");
     };
@@ -216,6 +218,8 @@ fn exhausting_one_token_composing_candidates_enters_segmented_conversion() {
     engine.composing_candidate_selected = true;
 
     engine.process_key(&press_key(Keysym::SPACE));
+
+    finish_segment_preparation(&mut engine);
 
     let InputState::Conversion { session } = engine.state() else {
         panic!("segmented conversion expected");
@@ -310,6 +314,8 @@ fn exhausting_whole_candidates_segments_the_live_first_surface() {
     let surface_before_segmentation = engine.preedit().unwrap().text().to_string();
     engine.process_key(&press_key(Keysym::SPACE));
 
+    finish_segment_preparation(&mut engine);
+
     let InputState::Conversion { session } = engine.state() else {
         panic!("segmented conversion expected");
     };
@@ -358,6 +364,8 @@ fn exhausting_composing_candidates_segments_the_live_first_surface() {
     engine.composing_candidate_selected = true;
 
     engine.process_key(&press_key(Keysym::SPACE));
+
+    finish_segment_preparation(&mut engine);
 
     let InputState::Conversion { session } = engine.state() else {
         panic!("segmented conversion expected");
@@ -491,6 +499,8 @@ fn long_live_surface_enters_segmented_mode_without_changing_text() {
 
     engine.process_key(&press_key(Keysym::SPACE));
     engine.process_key(&press_key(Keysym::SPACE));
+
+    finish_segment_preparation(&mut engine);
 
     let InputState::Conversion { session } = engine.state() else {
         panic!("segmented conversion expected");
@@ -1008,7 +1018,7 @@ fn segment_learning_accepts_equivalent_wave_dash_forms() {
 }
 
 #[test]
-fn segment_learning_precedes_initial_whole_reading_candidate() {
+fn segment_learning_never_replaces_initial_first_surface() {
     let mut engine = InputMethodEngine::new();
     let mut cache = karukan_engine::SegmentLearningCache::new(100);
     cache.record("あと", "あと", None, Some("、"));
@@ -1018,11 +1028,14 @@ fn segment_learning_precedes_initial_whole_reading_candidate() {
     let session = engine
         .build_initial_conversion_session("あと", CandidateList::from_strings(["後", "あと"]));
 
-    assert_eq!(session.selected_text(), "あと");
-    assert_eq!(
-        session.segments[0].candidates.candidates()[0]
-            .description
-            .as_deref(),
-        Some("文節修正")
+    assert_eq!(session.selected_text(), "後");
+    assert_eq!(session.segments[0].candidates.candidates()[0].text, "後");
+    assert!(
+        session.segments[0]
+            .candidates
+            .candidates()
+            .iter()
+            .any(|candidate| candidate.text == "あと"
+                && candidate.description.as_deref() == Some("文節修正"))
     );
 }

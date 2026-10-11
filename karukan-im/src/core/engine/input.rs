@@ -94,8 +94,14 @@ impl InputMethodEngine {
         if should_prioritize_single_hiragana(self.input_mode, reading) {
             return Some(reading.to_string());
         }
+        let prefix: String = reading.chars().take_while(|&ch| ch == 'ー').collect();
         self.lookup_user_dict_live_surface(reading)
-            .or_else(|| model_surface.map(str::to_string))
+            .filter(|surface| surface.starts_with(&prefix))
+            .or_else(|| {
+                model_surface
+                    .filter(|surface| surface.starts_with(&prefix))
+                    .map(str::to_string)
+            })
     }
 
     /// Keep the visible live surface identical to candidate 1 after candidate
@@ -177,7 +183,7 @@ impl InputMethodEngine {
             // rewriter variants. The rewriter path produces mozc-style symbol variants
             // (e.g. `「` → `『`, `【`, ...) for symbol-only inputs where the model is skipped.
             let reading = self.input_buf.text.clone();
-            if self.live.enabled && self.input_mode != InputMode::Katakana {
+            if self.input_mode != InputMode::Katakana {
                 self.live.text = self
                     .preferred_live_surface(&reading, None)
                     .unwrap_or_default();
@@ -221,7 +227,7 @@ impl InputMethodEngine {
         };
 
         // Live conversion mode: show converted text in preedit
-        if self.live.enabled && self.input_mode != InputMode::Katakana {
+        if self.input_mode != InputMode::Katakana {
             self.live.text = self
                 .preferred_live_surface(&reading, candidates.first().map(String::as_str))
                 .unwrap_or_default();
@@ -294,7 +300,7 @@ impl InputMethodEngine {
     /// Rebuild composing UI without waiting for model inference.
     pub(super) fn refresh_without_model(&mut self) -> EngineResult {
         let reading = self.input_buf.text.clone();
-        let live_active = self.live.enabled && self.input_mode != InputMode::Katakana;
+        let live_active = self.input_mode != InputMode::Katakana;
         let preferred = live_active
             .then(|| self.preferred_live_surface(&reading, None))
             .flatten();
@@ -342,7 +348,7 @@ impl InputMethodEngine {
     fn submit_live_inference(&mut self) {
         self.live_revision = self.live_revision.wrapping_add(1);
         let num_candidates = live_candidate_pool_limit(
-            self.live.enabled,
+            true,
             self.input_mode,
             &self.input_buf.text,
             self.config.live_num_candidates,
@@ -367,16 +373,20 @@ impl InputMethodEngine {
     /// The user may have typed a suffix since the request was submitted. That
     /// suffix remains raw and is appended after the converted prefix.
     pub fn poll_live_conversion(&mut self) -> Option<EngineResult> {
+        let prepared = self.poll_segment_preparation();
         let result = self
             .converters
             .kanji
             .as_ref()
-            .and_then(|worker| worker.poll_latest())?;
+            .and_then(|worker| worker.poll_latest());
+        let Some(result) = result else {
+            return prepared;
+        };
         if result.revision <= self.live_cancel_revision
             || !matches!(self.state, InputState::Composing { .. })
             || !self.input_buf.text.starts_with(&result.reading)
         {
-            return None;
+            return prepared;
         }
 
         self.metrics.conversion_ms = result.conversion_ms;
@@ -406,7 +416,7 @@ impl InputMethodEngine {
         let suffix = current_reading
             .strip_prefix(&result_reading)
             .unwrap_or_default();
-        if self.live.enabled && self.input_mode != InputMode::Katakana {
+        if self.input_mode != InputMode::Katakana {
             if let Some(surface) = self.preferred_live_surface(&current_reading, None) {
                 self.live
                     .set_applied_prefix(current_reading.clone(), surface);
@@ -462,6 +472,7 @@ impl InputMethodEngine {
         let candidates = self.set_composing_candidates(CandidateList::new(all_candidates));
         if result_reading == current_reading {
             self.mark_composing_candidates_model_ready();
+            self.prepare_current_live_segmentation();
         }
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
@@ -473,8 +484,8 @@ impl InputMethodEngine {
 
     /// Process key in empty state
     pub(super) fn process_key_empty(&mut self, key: &KeyEvent, shift_active: bool) -> EngineResult {
-        // Ctrl+Space: start input with full-width space
-        if key.modifiers.control_key && key.keysym == Keysym::SPACE {
+        // Shift+Space: start input with full-width space
+        if shift_active && key.keysym == Keysym::SPACE {
             self.converters.romaji.reset();
             self.input_buf.clear();
             self.input_buf.insert("\u{3000}");
@@ -485,7 +496,7 @@ impl InputMethodEngine {
         }
 
         // Bare Space from Empty state commits a half-width ASCII space in
-        // Hiragana. Full-width space is reserved for Ctrl+Space.
+        // Hiragana. Full-width space is reserved for Shift+Space.
         if key.keysym == Keysym::SPACE && !key.modifiers.control_key && !key.modifiers.alt_key {
             return if self.input_mode == InputMode::Hiragana {
                 EngineResult::consumed().with_action(EngineAction::Commit(" ".to_string()))
@@ -542,6 +553,8 @@ impl InputMethodEngine {
     /// Start input with a character (first character of a new input session).
     /// In alphabet mode, inserts directly; otherwise goes through romaji conversion.
     pub(super) fn start_input(&mut self, ch: char) -> EngineResult {
+        self.segmentation.clear();
+        self.pending_segment_models.clear();
         self.converters.romaji.reset();
         self.input_buf.clear();
 
@@ -600,26 +613,13 @@ impl InputMethodEngine {
         key: &KeyEvent,
         shift_active: bool,
     ) -> EngineResult {
-        // Handle Ctrl+key shortcuts
-        if key.modifiers.control_key {
-            match key.keysym {
-                // Ctrl+Space: insert full-width space (U+3000)
-                Keysym::SPACE => return self.input_fullwidth_space(),
-                // Ctrl+A: move to beginning (Emacs-style Home)
-                Keysym::KEY_A | Keysym::KEY_A_UPPER => return self.move_caret_home(),
-                // Ctrl+B: move left (Emacs-style Left)
-                Keysym::KEY_B | Keysym::KEY_B_UPPER => return self.move_caret_left(),
-                // Ctrl+E: move to end (Emacs-style End)
-                Keysym::KEY_E | Keysym::KEY_E_UPPER => return self.move_caret_end(),
-                // Ctrl+F: move right (Emacs-style Right)
-                Keysym::KEY_F | Keysym::KEY_F_UPPER => return self.move_caret_right(),
-                _ => {}
-            }
+        if key.keysym == Keysym::SPACE && shift_active {
+            return self.input_fullwidth_space();
         }
 
         match key.keysym {
             Keysym::RETURN => self.commit_composing(),
-            Keysym::ESCAPE if self.live.enabled && self.input_mode == InputMode::Hiragana => {
+            Keysym::ESCAPE if self.input_mode == InputMode::Hiragana => {
                 self.cancel_live_composing()
             }
             Keysym::ESCAPE => EngineResult::not_consumed(),
@@ -628,7 +628,6 @@ impl InputMethodEngine {
             Keysym::F6 => self.commit_composing_as(ComposingCommitForm::Hiragana),
             Keysym::F7 => self.commit_composing_as(ComposingCommitForm::FullKatakana),
             Keysym::F8 => self.commit_composing_as(ComposingCommitForm::HalfKatakana),
-            Keysym::F9 | Keysym::F10 => EngineResult::consumed(),
             Keysym::SPACE if self.input_mode == InputMode::Alphabet => self.input_char(' '),
             Keysym::SPACE if self.input_mode == InputMode::Emoji => {
                 self.select_next_composing_candidate()
@@ -677,19 +676,38 @@ impl InputMethodEngine {
         }
     }
 
-    /// Leave live/candidate selection while keeping the raw reading as an
-    /// ordinary unconfirmed hiragana preedit.
+    /// Cancel candidate selection without disabling live conversion.
     fn cancel_live_composing(&mut self) -> EngineResult {
-        self.invalidate_live_results();
-        self.live.clear();
-        self.clear_composing_candidates();
-        self.chunks.clear();
+        let was_selected = self.composing_candidate_selected;
+        self.composing_candidate_selected = false;
+        let candidates = self.composing_candidates.as_mut().map(|candidates| {
+            candidates.reset();
+            candidates.clone()
+        });
+        if was_selected
+            && let Some(first) = candidates
+                .as_ref()
+                .and_then(|candidates| candidates.candidates().first())
+        {
+            self.live.text = first.text.clone();
+            if self.composing_candidates_model_ready {
+                self.live
+                    .set_applied_prefix(self.input_buf.text.clone(), first.text.clone());
+            }
+        }
+        if was_selected && self.converters.kanji.is_some() {
+            self.submit_live_inference();
+        }
         let preedit = self.set_composing_state();
-
-        EngineResult::consumed()
+        let mut result = EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
-            .with_action(EngineAction::HideCandidates)
-            .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()))
+            .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
+        if let Some(candidates) = candidates {
+            result
+                .actions
+                .push(EngineAction::ShowCandidates(candidates));
+        }
+        result
     }
 
     /// Begin a new emoji-shortcode composing session.
@@ -810,6 +828,14 @@ impl InputMethodEngine {
     ) -> EngineResult {
         let selected_text = self.preserve_pending_w(candidates.selected_text().unwrap_or(""));
         self.composing_candidates = Some(candidates.clone());
+        if candidates.cursor() > 0
+            && let Some(first) = candidates.candidates().first()
+        {
+            let reading = self.input_buf.text.clone();
+            let surface = self.preserve_pending_w(&first.text);
+            let reading = self.preserve_pending_w(&reading);
+            self.prepare_segmentation(&reading, &surface);
+        }
 
         let mut preedit = Preedit::with_text(&selected_text);
         preedit.set_attributes(vec![PreeditAttribute::new(
@@ -866,6 +892,8 @@ impl InputMethodEngine {
         self.live.clear();
         self.clear_composing_candidates();
         self.chunks.clear();
+        self.segmentation.clear();
+        self.pending_segment_models.clear();
         self.state = InputState::Empty;
         self.exit_emoji_mode();
         if self.input_mode == InputMode::Alphabet {
@@ -898,6 +926,8 @@ impl InputMethodEngine {
         self.live.clear();
         self.clear_composing_candidates();
         self.chunks.clear();
+        self.segmentation.clear();
+        self.pending_segment_models.clear();
         self.state = InputState::Empty;
         self.exit_emoji_mode();
         if self.input_mode == InputMode::Alphabet {
@@ -942,6 +972,8 @@ impl InputMethodEngine {
         };
 
         if text.is_empty() {
+            self.segmentation.clear();
+            self.pending_segment_models.clear();
             self.state = InputState::Empty;
             self.input_buf.clear();
             self.live.clear();
@@ -957,6 +989,8 @@ impl InputMethodEngine {
         self.live.clear();
         self.clear_composing_candidates();
         self.chunks.clear();
+        self.segmentation.clear();
+        self.pending_segment_models.clear();
         self.state = InputState::Empty;
         self.exit_emoji_mode();
         if self.input_mode == InputMode::Alphabet {

@@ -105,7 +105,13 @@ pub(super) fn wave_dash_count_matches(surface: &str, reading: &str) -> bool {
 /// tokenizing a surface in isolation cannot disambiguate readings such as
 /// `後` (`あと` / `のち`), and rejecting those would damage names and places.
 pub(super) fn model_candidate_preserves_reading(surface: &str, reading: &str) -> bool {
-    if surface.is_empty() || reading.is_empty() || !wave_dash_count_matches(surface, reading) {
+    if surface.is_empty()
+        || reading.is_empty()
+        || !wave_dash_count_matches(surface, reading)
+        || surface.chars().any(|ch| {
+            ch.is_control() || matches!(ch, '\u{EE00}'..='\u{EE02}' | '\u{F700}'..='\u{F8FF}')
+        })
+    {
         return false;
     }
     let normalized_surface = karukan_engine::normalize_nfkc(surface);

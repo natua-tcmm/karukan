@@ -65,11 +65,28 @@ fn same_group(a: char, b: char) -> bool {
 /// [`is_japanese`]). So a maximal Japanese run and a maximal non-Japanese run
 /// each become their own chunk(s), and a run longer than `max` is hard-split
 /// into `max`-char pieces.
+#[cfg(test)]
 pub(super) fn group_chunks(chars: &[char], max: usize) -> Vec<&[char]> {
+    group_chunks_with_prefix(
+        chars,
+        max,
+        chars.iter().take_while(|&&ch| ch == 'ー').count(),
+    )
+}
+
+/// Leading prolonged marks are literal. Interior marks stay with their word.
+pub(super) fn group_chunks_with_prefix(chars: &[char], max: usize, leading: usize) -> Vec<&[char]> {
     let mut out = Vec::new();
     let mut start = 0;
+    let max = max.max(1);
     while start < chars.len() {
         let limit = (start + max).min(chars.len());
+        if start < leading {
+            let end = limit.min(leading);
+            out.push(&chars[start..end]);
+            start = end;
+            continue;
+        }
         let japanese = is_japanese(chars[start]);
         let mut i = start;
         while i < limit && is_japanese(chars[i]) == japanese {
@@ -255,6 +272,15 @@ impl InputMethodEngine {
         // Previous chunking (covers the pre-edit text). Move it out so the
         // model calls below don't conflict with borrowing `self.chunks`.
         let mut old = std::mem::take(&mut self.chunks);
+        let old_prefix = old
+            .iter()
+            .flat_map(|chunk| chunk.reading.chars())
+            .take_while(|&ch| ch == 'ー')
+            .count();
+        let literal_prefix = text.iter().take_while(|&&ch| ch == 'ー').count();
+        if old_prefix != literal_prefix {
+            old.clear();
+        }
         let old_lens: Vec<usize> = old.iter().map(|s| s.reading.chars().count()).collect();
         let old_text: Vec<char> = old.iter().flat_map(|s| s.reading.chars()).collect();
 
@@ -276,7 +302,11 @@ impl InputMethodEngine {
         // 2. Changed middle span: re-chunk and reconvert each new chunk against
         //    everything converted so far.
         let middle = &text[plan.mid_start..plan.mid_end];
-        for chunk in group_chunks(middle, chunk_len) {
+        for chunk in group_chunks_with_prefix(
+            middle,
+            chunk_len,
+            literal_prefix.saturating_sub(plan.mid_start),
+        ) {
             let reading: String = chunk.iter().collect();
             let new = self.convert_new_chunk(reading, &base_ctx, &combined);
             combined.push_str(&new.converted);
@@ -300,7 +330,7 @@ impl InputMethodEngine {
 
         let current_chunk = self.current_chunk_index();
         let candidate_limit = live_candidate_pool_limit(
-            self.live.enabled,
+            true,
             self.input_mode,
             &full_reading,
             self.config.live_num_candidates,
@@ -323,7 +353,10 @@ impl InputMethodEngine {
         base_ctx: &str,
         combined: &str,
     ) -> ComposingChunk {
-        let candidates = if reading.chars().next().is_some_and(is_japanese) {
+        let literal_leading_mark =
+            combined.chars().all(|ch| ch == 'ー') && reading.chars().all(|ch| ch == 'ー');
+        let candidates = if !literal_leading_mark && reading.chars().next().is_some_and(is_japanese)
+        {
             let lctx = self.lctx_for(base_ctx, combined);
             self.convert_chunk_candidates(&reading, &lctx)
         } else {
@@ -386,7 +419,7 @@ impl InputMethodEngine {
     /// to the reading itself when the model yields nothing.
     fn convert_chunk_candidates(&mut self, reading: &str, lctx: &str) -> Vec<String> {
         let candidate_limit = live_candidate_pool_limit(
-            self.live.enabled,
+            true,
             self.input_mode,
             &self.input_buf.text,
             self.config.live_num_candidates,

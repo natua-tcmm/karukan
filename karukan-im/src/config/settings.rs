@@ -46,8 +46,6 @@ pub struct ConversionSettings {
     pub model: Option<String>,
     /// Number of threads for llama.cpp inference (0 = all cores, llama.cpp default)
     pub n_threads: u32,
-    /// Enable live conversion at startup
-    pub live_conversion: bool,
 }
 
 /// Explicit segment-correction learning settings
@@ -260,6 +258,7 @@ num_candidates = 3
         let settings = parse_with_defaults(
             r#"
 [conversion]
+live_conversion = false
 strategy = "light"
 light_model = "jinen-v1-xsmall-q5"
 short_input_threshold = 5
@@ -279,6 +278,7 @@ model = "jinen-v1-xsmall-q5"
 
         let serialized = toml::to_string(&settings).unwrap();
         for key in [
+            "live_conversion",
             "strategy",
             "light_model",
             "short_input_threshold",

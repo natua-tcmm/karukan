@@ -20,8 +20,6 @@ composing_chunk_len = 30
 model = "jinen-v1-small-q5"
 # 推論スレッド数（0 = 全コア使用）
 n_threads = 4
-# 起動時にライブ変換を有効にする
-live_conversion = true
 # ユーザー辞書:
 # ~/Library/Application Support/com.karukan.karukan-im/user_dicts/
 # に辞書ファイルを配置（Mozc TSV or KRKN binary）

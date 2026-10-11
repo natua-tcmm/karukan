@@ -122,7 +122,7 @@ fn f6_f7_f8_commit_reading_while_navigating_conversion_candidates() {
 }
 
 #[test]
-fn f9_and_f10_are_consumed_noops_while_composing() {
+fn f9_and_f10_are_not_ime_bindings() {
     for key in [Keysym::F9, Keysym::F10] {
         let mut engine = make_live_conversion_engine();
         engine.process_key(&press('a'));
@@ -131,7 +131,7 @@ fn f9_and_f10_are_consumed_noops_while_composing() {
 
         let result = engine.process_key(&press_key(key));
 
-        assert!(result.consumed);
+        assert!(!result.consumed);
         assert!(result.actions.is_empty());
         assert_eq!(engine.preedit().unwrap().text(), before);
         assert_eq!(engine.live.text, "亜");

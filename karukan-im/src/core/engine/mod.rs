@@ -14,6 +14,7 @@ mod input_buffer;
 mod long_conversion;
 mod morphology;
 mod reading_correction;
+mod segmentation;
 mod types;
 
 pub use types::*;
@@ -65,6 +66,10 @@ fn finalize_whole_candidates(
     reading: &str,
     candidates: &mut Vec<Candidate>,
 ) {
+    let leading_marks: String = reading.chars().take_while(|&ch| ch == 'ー').collect();
+    if !leading_marks.is_empty() {
+        candidates.retain(|candidate| candidate.text.starts_with(&leading_marks));
+    }
     let reading_len = conversion_character_count(reading);
     let short_live_conversion = live_surface_active
         && input_mode == InputMode::Hiragana
@@ -147,14 +152,14 @@ fn conversion_character_count(text: &str) -> usize {
 }
 
 fn live_candidate_pool_limit(
-    live_enabled: bool,
+    live_surface_active: bool,
     input_mode: InputMode,
     reading: &str,
     configured_limit: usize,
 ) -> usize {
     let configured_limit = configured_limit.max(1);
     let reading_len = conversion_character_count(reading);
-    if live_enabled
+    if live_surface_active
         && input_mode == InputMode::Hiragana
         && (1..=SHORT_LIVE_READING_MAX_CHARS).contains(&reading_len)
     {
@@ -324,7 +329,7 @@ pub struct InputMethodEngine {
     /// Auto-suggest candidates shown while still in Composing state.
     ///
     /// Space, Tab, and Down open the explicit conversion list. This composing-time
-    /// list remains directly selectable through Up, the emoji picker, and clicks.
+    /// list remains directly selectable through Up and the emoji picker.
     composing_candidates: Option<CandidateList>,
     /// Whether the user has explicitly selected a composing-time candidate.
     /// Enter only commits `composing_candidates` after this flag is set;
@@ -349,6 +354,8 @@ pub struct InputMethodEngine {
     dicts: Dictionaries,
     /// Context-aware learning for explicitly corrected conversion segments.
     segment_learning: Option<SegmentLearningCache>,
+    segmentation: segmentation::SegmentationPreparation,
+    pending_segment_models: Vec<conversion::PendingSegmentModel>,
 }
 
 /// Whether a raw one-character hiragana reading should outrank learned,
@@ -391,13 +398,15 @@ impl InputMethodEngine {
             live_cancel_revision: 0,
             dicts: Dictionaries::default(),
             segment_learning: None,
+            segmentation: segmentation::SegmentationPreparation::default(),
+            pending_segment_models: Vec::new(),
         }
     }
 
     /// Create with configuration
     pub fn with_config(config: EngineConfig) -> Self {
         Self {
-            live: LiveConversion::new(config.live_conversion),
+            live: LiveConversion::default(),
             config,
             ..Self::new()
         }
@@ -445,6 +454,8 @@ impl InputMethodEngine {
     /// the session. A reset before the first key event must not wipe it.
     pub fn reset(&mut self) {
         self.invalidate_live_results();
+        self.segmentation.clear();
+        self.pending_segment_models.clear();
         self.state = InputState::Empty;
         self.converters.romaji.reset();
         self.input_mode = InputMode::Hiragana;
@@ -474,6 +485,8 @@ impl InputMethodEngine {
     fn try_reset_if_empty(&mut self) -> Option<EngineResult> {
         if self.build_input_display().is_empty() {
             self.invalidate_live_results();
+            self.segmentation.clear();
+            self.pending_segment_models.clear();
             self.state = InputState::Empty;
             self.input_buf.clear();
             // Erasing the whole buffer ends the composition: drop the live
@@ -703,14 +716,25 @@ impl InputMethodEngine {
         // conversion_ms reports this key only: 0 unless a conversion runs below
         self.metrics.conversion_ms = 0;
 
+        // Application shortcuts have no IME bindings in any input state.
+        if key.modifiers.control_key || key.modifiers.alt_key || key.modifiers.super_key {
+            return EngineResult::not_consumed();
+        }
+
         let shift_active = key.modifiers.shift_key;
 
-        let result = match &self.state {
+        let prepared = self.poll_segment_preparation();
+        let mut result = match &self.state {
             InputState::Empty => self.process_key_empty(key, shift_active),
             InputState::Composing { .. } => self.process_key_composing(key, shift_active),
             InputState::Conversion { .. } => self.process_key_conversion(key),
         };
 
+        if let Some(mut prepared) = prepared {
+            prepared.actions.extend(result.actions);
+            result.actions = prepared.actions;
+        }
+        self.prepare_current_live_segmentation();
         self.metrics.process_key_ms = start.elapsed().as_millis() as u64;
 
         result
@@ -744,6 +768,8 @@ impl InputMethodEngine {
                 self.input_buf.clear();
                 self.live.clear();
                 self.clear_composing_candidates();
+                self.segmentation.clear();
+                self.pending_segment_models.clear();
                 self.state = InputState::Empty;
                 self.surrounding_context = None;
                 self.exit_emoji_mode();
@@ -754,6 +780,8 @@ impl InputMethodEngine {
                 self.record_modified_segments();
                 self.input_buf.clear();
                 self.clear_composing_candidates();
+                self.segmentation.clear();
+                self.pending_segment_models.clear();
                 self.state = InputState::Empty;
                 self.surrounding_context = None;
                 self.exit_emoji_mode();

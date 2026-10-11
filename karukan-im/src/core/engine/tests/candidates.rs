@@ -432,7 +432,8 @@ fn single_hiragana_is_first_explicit_conversion_candidate() {
     engine.process_key(&press_key(Keysym::SPACE));
 
     let candidates = engine.state().candidates().unwrap();
-    assert_eq!(candidates.selected_text(), Some("し"));
+    assert_eq!(candidates.candidates()[0].text, "し");
+    assert_eq!(candidates.selected_text(), Some("詩"));
     assert!(
         candidates
             .candidates()

@@ -6,8 +6,7 @@ impl InputMethodEngine {
     /// A final pending `w` is literal laughter when accepting live conversion.
     /// Keep it buffered while typing so `wa` / `wi` / `we` / `wo` still work.
     pub(super) fn preserve_pending_w(&self, surface: &str) -> String {
-        if self.live.enabled
-            && self.input_mode == InputMode::Hiragana
+        if self.input_mode == InputMode::Hiragana
             && self.input_buf.cursor_pos == self.input_buf.text.chars().count()
             && self.converters.romaji.buffer() == "w"
         {
@@ -70,8 +69,7 @@ impl InputMethodEngine {
         let len = display.chars().count();
         let mut preedit = Preedit::with_text(&display);
         preedit.set_caret(caret);
-        if self.live.enabled && matches!(self.input_mode, InputMode::Hiragana | InputMode::Alphabet)
-        {
+        if matches!(self.input_mode, InputMode::Hiragana | InputMode::Alphabet) {
             let completed_len = if !self.live.text.is_empty()
                 && !self.live.applied_reading.is_empty()
                 && self.input_buf.text.starts_with(&self.live.applied_reading)
@@ -124,9 +122,8 @@ impl InputMethodEngine {
 
     /// Whether the current Hiragana reading, including any pending romaji,
     /// is fully covered by the most recently applied live-conversion result.
-    fn live_conversion_finished(&self, reading: &str) -> bool {
+    pub(super) fn live_conversion_finished(&self, reading: &str) -> bool {
         self.input_mode == InputMode::Hiragana
-            && self.live.enabled
             && !reading.is_empty()
             && self.converters.romaji.buffer().is_empty()
             && self.live.applied_reading == reading

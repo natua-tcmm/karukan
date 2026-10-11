@@ -27,7 +27,7 @@ enum KeyCodeMap {
         48: 0xff09,  // Tab
         51: 0xff08,  // Delete (Backspace)
         53: 0xff1b,  // Escape
-        76: 0xff8d,  // Keypad Enter
+        76: 0xff0d,  // Keypad Enter (same action as Return)
         115: 0xff50,  // Home
         116: 0xff55,  // Page Up
         117: 0xffff,  // Forward Delete
@@ -93,6 +93,12 @@ enum KeyCodeMap {
             return nil
         }
         return EngineKeyEvent(keysym: keysym, modifiers: modifiers)
+    }
+
+    static func containsNonTextScalar(_ characters: String?) -> Bool {
+        characters?.unicodeScalars.contains {
+            CharacterSet.controlCharacters.contains($0) || (0xf700...0xf8ff).contains($0.value)
+        } ?? false
     }
 
     static func translate(event: NSEvent) -> EngineKeyEvent? {

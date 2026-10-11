@@ -146,7 +146,7 @@ fn test_engine_escape_does_not_cancel_composing() {
     engine.process_key(&press('i'));
 
     let result = engine.process_key(&press_key(Keysym::ESCAPE));
-    assert!(!result.consumed);
+    assert!(result.consumed);
     assert!(matches!(engine.state(), InputState::Composing { .. }));
     assert_eq!(engine.preedit().unwrap().text(), "あい");
 }

@@ -18,7 +18,6 @@ class CandidateWindowController {
     private let stackView: NSStackView
     private var rowViews: [NSView] = []
     private var auxText: String?
-    var onSelect: ((Int) -> Void)?
 
     private struct PageState {
         let candidates: [CandidateItem]
@@ -39,7 +38,7 @@ class CandidateWindowController {
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = NSColor.windowBackgroundColor
-        panel.ignoresMouseEvents = false
+        panel.ignoresMouseEvents = true
 
         stackView = NSStackView()
         stackView.orientation = .vertical
@@ -86,7 +85,6 @@ class CandidateWindowController {
 
     func hide() {
         pageState = nil
-        onSelect = nil
         panel.orderOut(nil)
     }
 
@@ -137,24 +135,14 @@ class CandidateWindowController {
                 ))
         }
 
-        let button = NSButton(title: "", target: self, action: #selector(candidateClicked(_:)))
-        button.attributedTitle = text
-        button.tag = number - 1
-        button.isBordered = false
-        button.alignment = .left
-        button.translatesAutoresizingMaskIntoConstraints = false
+        let label = NSTextField(labelWithAttributedString: text)
+        label.translatesAutoresizingMaskIntoConstraints = false
         if selected {
-            button.wantsLayer = true
-            button.layer?.backgroundColor = NSColor.selectedContentBackgroundColor.cgColor
-        } else {
-            button.wantsLayer = false
+            label.wantsLayer = true
+            label.layer?.backgroundColor = NSColor.selectedContentBackgroundColor.cgColor
         }
-        stackView.addArrangedSubview(button)
-        rowViews.append(button)
-    }
-
-    @objc private func candidateClicked(_ sender: NSButton) {
-        onSelect?(sender.tag)
+        stackView.addArrangedSubview(label)
+        rowViews.append(label)
     }
 
     @discardableResult

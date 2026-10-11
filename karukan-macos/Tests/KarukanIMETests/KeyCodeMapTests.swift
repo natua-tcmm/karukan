@@ -58,6 +58,27 @@ final class KeyCodeMapTests: XCTestCase {
         XCTAssertEqual(event?.keysym, 0xff0d)
     }
 
+    func testKeypadEnterUsesReturnAction() {
+        let event = KeyCodeMap.translate(
+            keyCode: 76, characters: "\u{03}", charactersIgnoringModifiers: "\u{03}", flags: [])
+        XCTAssertEqual(event?.keysym, 0xff0d)
+    }
+
+    func testFunctionAndControlScalarsAreNotText() {
+        for text in ["\u{F700}", "\u{F701}", "\u{F702}", "\u{F703}", "\u{03}", "\u{1b}"] {
+            XCTAssertTrue(KeyCodeMap.containsNonTextScalar(text))
+        }
+        XCTAssertFalse(KeyCodeMap.containsNonTextScalar("あ😀"))
+        XCTAssertFalse(KeyCodeMap.containsNonTextScalar(nil))
+    }
+
+    func testShiftSpacePreservesShiftModifier() {
+        let event = KeyCodeMap.translate(
+            keyCode: 49, characters: " ", charactersIgnoringModifiers: " ", flags: [.shift])
+        XCTAssertEqual(event?.keysym, 0x20)
+        XCTAssertEqual(event?.modifiers.shift, true)
+    }
+
     func testEscape() {
         let event = KeyCodeMap.translate(
             keyCode: 53, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", flags: [])

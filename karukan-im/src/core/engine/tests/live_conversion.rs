@@ -99,33 +99,7 @@ fn other_pending_consonants_keep_existing_live_commit_behavior() {
 // --- Live conversion tests ---
 
 #[test]
-fn test_live_conversion_disabled_by_default() {
-    let engine = InputMethodEngine::new();
-    assert!(!engine.live.enabled);
-}
-
-#[test]
-fn test_live_conversion_enabled() {
-    let engine = make_live_conversion_engine();
-    assert!(engine.live.enabled);
-}
-
-#[test]
-fn test_live_conversion_off_unchanged() {
-    // With live_conversion=false, auto-suggest should show candidates (existing behavior)
-    let mut engine = InputMethodEngine::new();
-    assert!(!engine.live.enabled);
-
-    // Type "ai" -> "あい" (standard hiragana preedit)
-    engine.process_key(&press('a'));
-    engine.process_key(&press('i'));
-    assert_eq!(engine.preedit().unwrap().text(), "あい");
-    // live_conversion_text should be empty
-    assert!(engine.live.text.is_empty());
-}
-
-#[test]
-fn test_live_conversion_escape_restores_raw_unconfirmed_reading() {
+fn test_live_conversion_escape_preserves_live_first() {
     // Escape is reserved for conversion-mode cancel; during composing the IME
     // leaves the current input/live text untouched.
     let mut engine = make_live_conversion_engine();
@@ -137,22 +111,22 @@ fn test_live_conversion_escape_restores_raw_unconfirmed_reading() {
     // Simulate live conversion being active
     engine.live.text = "愛".to_string();
 
-    // Press Escape -> consume it and restore the raw unconfirmed reading.
+    // Press Escape -> consume it without disabling live conversion.
     let result = engine.process_key(&press_key(Keysym::ESCAPE));
     assert!(result.consumed);
-    assert!(engine.live.text.is_empty());
+    assert_eq!(engine.live.text, "愛");
     assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.preedit().unwrap().text(), "あい");
+    assert_eq!(engine.preedit().unwrap().text(), "愛");
     assert!(
         result
             .actions
             .iter()
-            .any(|action| matches!(action, EngineAction::HideCandidates))
+            .any(|action| matches!(action, EngineAction::UpdatePreedit(_)))
     );
 }
 
 #[test]
-fn test_live_conversion_escape_twice_keeps_raw_unconfirmed_reading() {
+fn test_live_conversion_escape_twice_keeps_live_first() {
     let mut engine = make_live_conversion_engine();
 
     engine.process_key(&press('a'));
@@ -164,14 +138,14 @@ fn test_live_conversion_escape_twice_keeps_raw_unconfirmed_reading() {
     let first = engine.process_key(&press_key(Keysym::ESCAPE));
     assert!(first.consumed);
     assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert!(engine.live.text.is_empty());
-    assert_eq!(engine.preedit().unwrap().text(), "あい");
+    assert_eq!(engine.live.text, "愛");
+    assert_eq!(engine.preedit().unwrap().text(), "愛");
 
     let second = engine.process_key(&press_key(Keysym::ESCAPE));
     assert!(second.consumed);
     assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert!(engine.live.text.is_empty());
-    assert_eq!(engine.preedit().unwrap().text(), "あい");
+    assert_eq!(engine.live.text, "愛");
+    assert_eq!(engine.preedit().unwrap().text(), "愛");
 }
 
 #[test]
@@ -402,40 +376,40 @@ fn test_alphabet_mode_pure_latin_preserves_live_text() {
     assert_eq!(engine.live.text, "AB");
 }
 
-// --- Ctrl+Space full-width space tests ---
+// --- Shift+Space full-width space tests ---
 
 #[test]
-fn test_ctrl_space_inserts_fullwidth_space_in_empty() {
+fn test_shift_space_inserts_fullwidth_space_in_empty() {
     let mut engine = InputMethodEngine::new();
 
-    // Ctrl+Space in Empty state -> start input with full-width space
-    let result = engine.process_key(&press_ctrl(Keysym::SPACE));
+    // Shift+Space in Empty state -> start input with full-width space
+    let result = engine.process_key(&press_shift(' '));
     assert!(result.consumed);
     assert!(matches!(engine.state(), InputState::Composing { .. }));
     assert_eq!(engine.preedit().unwrap().text(), "\u{3000}");
 }
 
 #[test]
-fn test_ctrl_space_inserts_fullwidth_space_in_hiragana() {
+fn test_shift_space_inserts_fullwidth_space_in_hiragana() {
     let mut engine = InputMethodEngine::new();
 
     // Type "あ"
     engine.process_key(&press('a'));
     assert_eq!(engine.preedit().unwrap().text(), "あ");
 
-    // Ctrl+Space -> insert full-width space
-    let result = engine.process_key(&press_ctrl(Keysym::SPACE));
+    // Shift+Space -> insert full-width space
+    let result = engine.process_key(&press_shift(' '));
     assert!(result.consumed);
     assert_eq!(engine.preedit().unwrap().text(), "あ\u{3000}");
 }
 
 #[test]
-fn test_ctrl_space_fullwidth_space_commit() {
+fn test_shift_space_fullwidth_space_commit() {
     let mut engine = InputMethodEngine::new();
 
     // Type "あ" + fullwidth space
     engine.process_key(&press('a'));
-    engine.process_key(&press_ctrl(Keysym::SPACE));
+    engine.process_key(&press_shift(' '));
 
     // Enter to commit
     let result = engine.process_key(&press_key(Keysym::RETURN));
@@ -458,23 +432,19 @@ fn test_ctrl_space_fullwidth_space_commit() {
 #[test]
 fn test_ctrl_shift_l_is_not_consumed() {
     let mut engine = InputMethodEngine::new();
-    assert!(!engine.live.enabled);
 
     // Ctrl+Shift+L is no longer an IME shortcut.
     let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L_UPPER));
-    assert!(!engine.live.enabled);
     assert!(!result.consumed);
 }
 
 #[test]
 fn test_ctrl_shift_l_lowercase_is_not_consumed() {
     let mut engine = InputMethodEngine::new();
-    assert!(!engine.live.enabled);
 
     // Ctrl+Shift+l (lowercase keysym) is not an IME shortcut.
     let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L));
     assert!(!result.consumed);
-    assert!(!engine.live.enabled);
 }
 
 #[test]
@@ -482,11 +452,9 @@ fn test_ctrl_shift_l_during_composing_is_not_consumed() {
     let mut engine = InputMethodEngine::new();
     engine.process_key(&press('a'));
     engine.process_key(&press('i'));
-    assert!(!engine.live.enabled);
 
     let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L_UPPER));
     assert!(!result.consumed);
-    assert!(!engine.live.enabled);
 }
 
 #[test]
@@ -498,19 +466,7 @@ fn test_ctrl_shift_l_during_live_conversion_is_not_consumed() {
 
     let result = engine.process_key(&press_ctrl_shift(Keysym::KEY_L_UPPER));
     assert!(!result.consumed);
-    assert!(engine.live.enabled);
     assert_eq!(engine.live.text, "愛");
-}
-
-#[test]
-fn test_engine_config_live_conversion_enabled() {
-    use crate::core::engine::EngineConfig;
-    let config = EngineConfig {
-        live_conversion: true,
-        ..EngineConfig::default()
-    };
-    let engine = InputMethodEngine::with_config(config);
-    assert!(engine.live.enabled);
 }
 
 #[test]

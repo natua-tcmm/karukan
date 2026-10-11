@@ -79,8 +79,6 @@ pub struct EngineConfig {
     /// background live-conversion work stays bounded for long input. See
     /// [`ComposingChunk`] and `chunked_auto_suggest`.
     pub composing_chunk_len: usize,
-    /// Whether live conversion is enabled at engine startup
-    pub live_conversion: bool,
 }
 
 impl EngineConfig {
@@ -97,7 +95,6 @@ impl EngineConfig {
                 0
             },
             composing_chunk_len: settings.conversion.composing_chunk_len,
-            live_conversion: settings.conversion.live_conversion,
         }
     }
 }
@@ -110,7 +107,6 @@ impl Default for EngineConfig {
             display_context_len: 10,
             max_api_context_len: 10,
             composing_chunk_len: 30,
-            live_conversion: false,
         }
     }
 }
@@ -165,11 +161,9 @@ pub(in crate::core) struct ComposingChunk {
     pub candidates: Vec<String>,
 }
 
-/// Live conversion state: enabled flag and current converted text
+/// Live conversion surfaces and the most recently applied reading prefix
 #[derive(Debug, Clone, Default)]
 pub(in crate::core) struct LiveConversion {
-    /// Whether live conversion is enabled
-    pub enabled: bool,
     /// Converted text (non-empty when live conversion produced a result)
     pub text: String,
     /// Reading prefix covered by the most recently applied inference result.
@@ -179,15 +173,6 @@ pub(in crate::core) struct LiveConversion {
 }
 
 impl LiveConversion {
-    pub fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            text: String::new(),
-            applied_reading: String::new(),
-            applied_text: String::new(),
-        }
-    }
-
     pub fn clear(&mut self) {
         self.text.clear();
         self.applied_reading.clear();

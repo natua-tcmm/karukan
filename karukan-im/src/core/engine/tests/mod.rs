@@ -16,6 +16,7 @@ mod live_conversion;
 mod mode_toggle;
 mod passthrough;
 mod rewriter;
+mod segmentation;
 mod surrounding;
 
 fn press(ch: char) -> KeyEvent {
@@ -51,7 +52,18 @@ fn press_ctrl_shift(keysym: Keysym) -> KeyEvent {
 }
 
 fn make_live_conversion_engine() -> InputMethodEngine {
-    let mut engine = InputMethodEngine::new();
-    engine.live.enabled = true;
-    engine
+    InputMethodEngine::new()
+}
+
+// Wait for asynchronous boundaries only in tests that inspect the final session.
+fn finish_segment_preparation(engine: &mut InputMethodEngine) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while engine.segmentation.entering {
+        engine.poll_live_conversion();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "morphology preparation timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }

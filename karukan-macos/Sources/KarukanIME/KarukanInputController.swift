@@ -16,6 +16,7 @@ class KarukanInputController: IMKInputController {
     private weak var activeClient: AnyObject?
     private var livePollTimer: DispatchSourceTimer?
     private var livePollInFlight = false
+    private var livePollGeneration: UInt64 = 0
 
     // MARK: - Event handling
 
@@ -30,8 +31,10 @@ class KarukanInputController: IMKInputController {
         activeClient = client as AnyObject
 
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        // Never swallow Command shortcuts.
-        if flags.contains(.command) { return false }
+        // Application shortcuts have no IME-specific bindings.
+        if flags.contains(.command) || flags.contains(.control) || flags.contains(.option) {
+            return false
+        }
 
         // JIS かな key (and Karabiner right-Command tap → かな): always
         // consume so the system doesn't process keyCode 104 after the engine
@@ -51,7 +54,10 @@ class KarukanInputController: IMKInputController {
             return false
         }
 
-        guard let key = KeyCodeMap.translate(event: event) else { return false }
+        guard let key = KeyCodeMap.translate(event: event) else {
+            // AppKit function-key/control scalars must never become marked text.
+            return hasPreedit && KeyCodeMap.containsNonTextScalar(event.characters)
+        }
 
         // Refresh the conversion context while no composition is active.
         // Queued before process_key on the same pipe, so the
@@ -64,9 +70,10 @@ class KarukanInputController: IMKInputController {
         }
 
         guard let result = engineClient.processKeySync(key) else {
-            // Engine busy or dead: let the key pass through rather than
-            // freezing input.
-            return false
+            // Ordinary text passes through if the engine is unavailable.
+            // Navigation/function keys carry AppKit private-use scalars. Do not
+            // pass those through an active composition after a timeout.
+            return hasPreedit && key.keysym >= 0xff00
         }
         apply(actions: result.actions, client: client)
         return result.consumed
@@ -146,12 +153,6 @@ class KarukanInputController: IMKInputController {
                 }
 
             case .showCandidates(let candidates, let cursor, let page, let totalPages):
-                Self.candidateWindow.onSelect = { [weak self] pageIndex in
-                    guard let self,
-                        let result = engineClient.selectCandidateSync(pageIndex: pageIndex)
-                    else { return }
-                    self.apply(actions: result.actions, client: client)
-                }
                 // Query the composition anchor (a synchronous IPC into the
                 // focused app) only when the panel comes on screen; it
                 // doesn't move while the panel stays visible.
@@ -190,6 +191,7 @@ class KarukanInputController: IMKInputController {
     }
 
     private func stopLivePolling() {
+        livePollGeneration &+= 1
         livePollTimer?.cancel()
         livePollTimer = nil
         livePollInFlight = false
@@ -200,11 +202,13 @@ class KarukanInputController: IMKInputController {
             let client = activeClient as? (any IMKTextInput)
         else { return }
         livePollInFlight = true
+        let generation = livePollGeneration
         engineClient.pollLiveConversionAsync { [weak self, weak clientObject = client as AnyObject] result in
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, generation == self.livePollGeneration else { return }
                 self.livePollInFlight = false
-                guard let client = clientObject as? (any IMKTextInput),
+                guard self.hasPreedit, self.activeClient === clientObject,
+                    let client = clientObject as? (any IMKTextInput),
                     let result, !result.actions.isEmpty
                 else { return }
                 self.apply(actions: result.actions, client: client)

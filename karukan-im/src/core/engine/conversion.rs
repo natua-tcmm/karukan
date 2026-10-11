@@ -23,6 +23,13 @@ use crate::core::engine::reading_correction::{
 /// Maximum number of learning candidates to show
 const MAX_LEARNING_CANDIDATES: usize = 3;
 
+pub(super) struct PendingSegmentModel {
+    pub(super) reading: String,
+    pub(super) range: std::ops::Range<usize>,
+    pub(super) session_reading: String,
+    pub(super) response: std::sync::mpsc::Receiver<Vec<karukan_engine::ModelCandidate>>,
+}
+
 type SegmentLearningRecord = (String, String, Option<String>, Option<String>);
 
 /// Derive correction-learning records from an explicitly selected whole
@@ -380,6 +387,11 @@ impl InputMethodEngine {
         if !prev_suggest_text.is_empty() && candidate_list.len() > 1 {
             candidate_list.select(1);
         }
+        if candidate_list.cursor() > 0
+            && let Some(first) = candidate_list.candidates().first()
+        {
+            self.prepare_segmentation(&reading, &first.text);
+        }
         let session =
             crate::core::state::ConversionSession::single(reading.clone(), candidate_list);
         self.enter_conversion_state(session)
@@ -419,7 +431,57 @@ impl InputMethodEngine {
         reading: &str,
         full_candidates: CandidateList,
     ) -> crate::core::state::ConversionSession {
-        self.build_segmented_conversion_session(reading, full_candidates)
+        let surface = full_candidates
+            .candidates()
+            .first()
+            .map(|candidate| candidate.text.as_str())
+            .unwrap_or(reading);
+        let initial = segment_live_surface(surface, reading).unwrap_or_else(|| {
+            vec![SurfaceSegment {
+                reading_range: 0..reading.chars().count(),
+                reading: reading.to_string(),
+                surface: surface.to_string(),
+            }]
+        });
+        self.session_from_prepared_segments(reading, initial)
+    }
+
+    pub(super) fn prepare_segmentation(&mut self, reading: &str, surface: &str) {
+        if reading.is_empty() || self.input_mode == InputMode::Emoji {
+            return;
+        }
+        if self
+            .segmentation
+            .requested
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.reading == reading && snapshot.surface == surface)
+        {
+            return;
+        }
+        self.segmentation.generation = self.segmentation.generation.wrapping_add(1);
+        let snapshot = super::segmentation::Snapshot {
+            generation: self.segmentation.generation,
+            reading: reading.to_string(),
+            surface: surface.to_string(),
+        };
+        self.segmentation.prepared = None;
+        self.segmentation.requested = Some(snapshot.clone());
+        self.segmentation
+            .worker
+            .get_or_insert_with(super::segmentation::SegmentationWorker::new)
+            .submit(snapshot);
+    }
+
+    pub(super) fn prepare_current_live_segmentation(&mut self) {
+        if self.live_conversion_finished(&self.input_buf.text)
+            && let Some(surface) = self
+                .composing_candidates
+                .as_ref()
+                .and_then(|candidates| candidates.candidates().first())
+                .map(|candidate| candidate.text.clone())
+        {
+            self.prepare_segmentation(&self.input_buf.text.clone(), &surface);
+        }
     }
 
     fn build_segmented_conversion_session(
@@ -427,84 +489,154 @@ impl InputMethodEngine {
         reading: &str,
         full_candidates: CandidateList,
     ) -> crate::core::state::ConversionSession {
-        // Candidate 1 is the exact live-conversion result. Candidate navigation
-        // may currently be highlighting candidate 2, 3, 4, or (for a short
-        // reading) 5, but partial
-        // conversion must derive stable boundaries from the most likely
-        // sentence rather than from whichever whole candidate was viewed last.
-        let live_surface = full_candidates
+        // Always freeze candidate 1, never the currently highlighted alternative.
+        self.segmentation.live_candidates = Some((reading.to_string(), full_candidates.clone()));
+        let surface = full_candidates
             .candidates()
             .first()
-            .map(|candidate| candidate.text.as_str())
-            .filter(|surface| !surface.is_empty())
-            .unwrap_or(reading)
-            .to_string();
-        // Partial conversion is a mode transition, not a promise that
-        // morphology will produce multiple spans. Even one-token input (or a
-        // failed analysis) must rebuild a segment candidate list instead of
-        // retaining the exhausted three whole-reading candidates.
-        let initial = segment_live_surface(&live_surface, reading).unwrap_or_else(|| {
-            vec![SurfaceSegment {
-                reading_range: 0..reading.chars().count(),
-                reading: reading.to_string(),
-                surface: live_surface.clone(),
-            }]
-        });
+            .map(|candidate| candidate.text.clone())
+            .unwrap_or_else(|| reading.to_string());
+        self.prepare_segmentation(reading, &surface);
+        self.collect_prepared_segmentation();
+        if let Some(initial) = self.segmentation.prepared.clone() {
+            self.segmentation.entering = false;
+            self.session_from_prepared_segments(reading, initial)
+        } else {
+            // Display the exact first surface immediately. The poll path will
+            // install the real boundaries without changing this text.
+            self.segmentation.entering = true;
+            crate::core::state::ConversionSession::segmented(
+                reading.to_string(),
+                vec![crate::core::state::ConversionSegment::new(
+                    0..reading.chars().count(),
+                    reading.to_string(),
+                    CandidateList::from_strings_with_reading([&surface], reading),
+                )],
+            )
+        }
+    }
 
+    fn session_from_prepared_segments(
+        &mut self,
+        reading: &str,
+        initial: Vec<SurfaceSegment>,
+    ) -> crate::core::state::ConversionSession {
+        self.pending_segment_models.clear();
         let mut segments = Vec::with_capacity(initial.len());
-        let mut preserved_live_surface = true;
-        for (index, initial_segment) in initial.iter().enumerate() {
-            let left_hint = index
+        let mut context = self.truncate_context_for_api();
+        for (index, part) in initial.iter().enumerate() {
+            let left = index
                 .checked_sub(1)
                 .and_then(|previous| initial[previous].surface.chars().last())
                 .map(|ch| ch.to_string())
                 .or_else(|| self.editor_left_hint());
-            let right_hint = initial
+            let right = initial
                 .get(index + 1)
                 .and_then(|next| next.surface.chars().next())
                 .map(|ch| ch.to_string())
                 .or_else(|| self.editor_right_hint());
-            let base_candidates = CandidateList::new(
-                self.build_conversion_candidates(
-                    &initial_segment.reading,
-                    MAX_SEGMENT_CANDIDATES,
-                    false,
-                )
-                .into_iter()
-                .map(|candidate| candidate.into_ui_candidate(&initial_segment.reading))
-                .collect(),
-            );
-            let (candidates, has_segment_learning) = self.prepend_segment_learning(
-                &initial_segment.reading,
-                base_candidates,
-                left_hint.as_deref(),
-                right_hint.as_deref(),
-            );
-            let candidates = if has_segment_learning {
-                // A context-matching explicit correction is the one case that
-                // intentionally supersedes the model's current surface.
-                preserved_live_surface = false;
-                candidates
-            } else {
-                pin_current_surface(
-                    candidates,
-                    &initial_segment.surface,
-                    &initial_segment.reading,
-                )
-            };
-            segments.push(crate::core::state::ConversionSegment::new(
-                initial_segment.reading_range.clone(),
-                initial_segment.reading.clone(),
+            let candidates =
+                self.boundary_candidate_list(&part.reading, left.as_deref(), right.as_deref());
+            // Learning may add alternatives, but can never replace the original
+            // surface at candidate 1 when entering segment correction.
+            let candidates = pin_current_surface(candidates, &part.surface, &part.reading);
+            let segment = crate::core::state::ConversionSegment::new(
+                part.reading_range.clone(),
+                part.reading.clone(),
                 candidates,
-            ));
+            );
+            if let Some(worker) = &self.converters.kanji
+                && part.reading.chars().any(super::chunk::is_japanese)
+                && !part.reading.chars().all(|ch| ch == 'ー')
+            {
+                self.pending_segment_models.push(PendingSegmentModel {
+                    reading: part.reading.clone(),
+                    range: part.reading_range.clone(),
+                    session_reading: reading.to_string(),
+                    response: worker.convert_async(&part.reading, &context, MAX_SEGMENT_CANDIDATES),
+                });
+            }
+            context = self.truncate_context(&format!("{context}{}", part.surface));
+            segments.push(segment);
         }
+        crate::core::state::ConversionSession::segmented(reading.to_string(), segments)
+    }
 
-        let session =
-            crate::core::state::ConversionSession::segmented(reading.to_string(), segments);
-        if preserved_live_surface {
-            debug_assert_eq!(session.selected_text(), live_surface);
+    fn collect_prepared_segmentation(&mut self) {
+        if let Some(result) = self
+            .segmentation
+            .worker
+            .as_ref()
+            .and_then(|worker| worker.poll())
+            && self.segmentation.requested.as_ref() == Some(&result.snapshot)
+        {
+            self.segmentation.prepared = Some(result.segments);
         }
-        session
+    }
+
+    pub(super) fn poll_segment_preparation(&mut self) -> Option<EngineResult> {
+        self.collect_prepared_segmentation();
+        if self.segmentation.entering {
+            let snapshot = self.segmentation.requested.clone()?;
+            let valid = matches!(&self.state, InputState::Conversion { session }
+                if !session.is_whole_candidate_phase()
+                    && session.reading == snapshot.reading
+                    && session.selected_text() == snapshot.surface);
+            if !valid {
+                self.segmentation.entering = false;
+            } else if let Some(parts) = self.segmentation.prepared.clone() {
+                self.segmentation.entering = false;
+                let session = self.session_from_prepared_segments(&snapshot.reading, parts);
+                return Some(self.enter_conversion_state(session));
+            }
+        }
+        let mut updated = false;
+        self.pending_segment_models.retain(|job| {
+            let candidates = match job.response.try_recv() {
+                Ok(candidates) => candidates,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return false,
+            };
+            if let InputState::Conversion { session } = &mut self.state
+                && !session.is_whole_candidate_phase()
+                && session.reading == job.session_reading
+                && let Some(part) = session
+                    .segments
+                    .iter_mut()
+                    .find(|part| part.reading == job.reading && part.reading_range == job.range)
+            {
+                let selected = part.selected_text().to_string();
+                let mut values = part.candidates.candidates().to_vec();
+                let mut seen: HashSet<_> = values
+                    .iter()
+                    .map(|candidate| candidate.text.clone())
+                    .collect();
+                for candidate in candidates {
+                    if model_candidate_preserves_reading(&candidate.text, &job.reading)
+                        && seen.insert(candidate.text.clone())
+                    {
+                        values.push(Candidate::with_reading(candidate.text, &job.reading));
+                    }
+                }
+                part.candidates = CandidateList::new(values);
+                if let Some(index) = part
+                    .candidates
+                    .candidates()
+                    .iter()
+                    .position(|candidate| candidate.text == selected)
+                {
+                    part.candidates.select(index);
+                }
+                updated = true;
+            }
+            false
+        });
+        if updated {
+            let candidates = self.state.candidates()?.clone();
+            Some(self.update_conversion_preedit(&candidates))
+        } else {
+            None
+        }
     }
 
     fn editor_left_hint(&self) -> Option<String> {
@@ -834,6 +966,24 @@ impl InputMethodEngine {
         num_candidates: usize,
         skip_learning: bool,
     ) -> Vec<ConversionCandidate> {
+        let prefix: String = reading.chars().take_while(|&ch| ch == 'ー').collect();
+        if !prefix.is_empty() {
+            let rest = &reading[prefix.len()..];
+            if rest.is_empty() {
+                return vec![ConversionCandidate::new(reading, CandidateSource::Fallback)];
+            }
+            return self
+                .build_conversion_candidates(rest, num_candidates, skip_learning)
+                .into_iter()
+                .map(|mut candidate| {
+                    candidate.text = format!("{prefix}{}", candidate.text);
+                    candidate.reading = candidate
+                        .reading
+                        .map(|reading| format!("{prefix}{reading}"));
+                    candidate
+                })
+                .collect();
+        }
         // Try to initialize the kanji converter, but don't bail out if it
         // fails — symbol-only inputs (e.g. `。。。`) don't need the model and
         // we still want to produce dictionary, rewriter, and fallback candidates.
@@ -1107,6 +1257,26 @@ impl InputMethodEngine {
 
     /// Process key in conversion state
     pub(super) fn process_key_conversion(&mut self, key: &KeyEvent) -> EngineResult {
+        if key.keysym == Keysym::SPACE && key.modifiers.shift_key {
+            let mut result = self.commit_conversion();
+            result
+                .actions
+                .push(EngineAction::Commit("\u{3000}".to_string()));
+            return result;
+        }
+        if self.segmentation.entering
+            && matches!(
+                key.keysym,
+                Keysym::SPACE
+                    | Keysym::TAB
+                    | Keysym::UP
+                    | Keysym::DOWN
+                    | Keysym::LEFT
+                    | Keysym::RIGHT
+            )
+        {
+            return EngineResult::consumed();
+        }
         match key.keysym {
             Keysym::RETURN => self.commit_conversion(),
             Keysym::ESCAPE => self.cancel_conversion(),
@@ -1116,23 +1286,11 @@ impl InputMethodEngine {
             Keysym::RIGHT if !key.modifiers.shift_key => self.move_conversion_segment(true),
             Keysym::SPACE | Keysym::DOWN | Keysym::TAB => self.next_candidate(),
             Keysym::UP => self.prev_candidate(),
-            Keysym::PAGE_DOWN => self.next_candidate_page(),
-            Keysym::PAGE_UP => self.prev_candidate_page(),
             Keysym::BACKSPACE => self.backspace_conversion(),
             Keysym::F6 => self.commit_composing_as(ComposingCommitForm::Hiragana),
             Keysym::F7 => self.commit_composing_as(ComposingCommitForm::FullKatakana),
             Keysym::F8 => self.commit_composing_as(ComposingCommitForm::HalfKatakana),
-            Keysym::F9 | Keysym::F10 => EngineResult::consumed(),
             _ => {
-                // Ctrl+N / Ctrl+P: emacs-style candidate navigation
-                if key.modifiers.control_key && !key.modifiers.alt_key {
-                    match key.keysym {
-                        Keysym::KEY_N | Keysym::KEY_N_UPPER => return self.next_candidate(),
-                        Keysym::KEY_P | Keysym::KEY_P_UPPER => return self.prev_candidate(),
-                        _ => {}
-                    }
-                }
-
                 // Check for digit selection (1-9)
                 if let Some(digit) = key.keysym.digit_value() {
                     return self.select_candidate_by_digit(digit);
@@ -1162,31 +1320,14 @@ impl InputMethodEngine {
                 session.move_active_left();
             }
         }
-        // A resized neighboring segment may still have only its lightweight
-        // boundary candidates. Build its final list before showing it, so the
-        // next navigation key never silently replaces the visible list.
+        // A resized neighboring segment may need its lightweight candidates
+        // rebuilt. Queue model alternatives without waiting for inference.
         self.refresh_active_segment_candidates_if_dirty();
         let candidates = match &self.state {
             InputState::Conversion { session } => session.candidates().cloned().unwrap_or_default(),
             _ => return EngineResult::not_consumed(),
         };
         self.update_conversion_preedit(&candidates)
-    }
-
-    fn segment_candidate_list(
-        &mut self,
-        reading: &str,
-        left_hint: Option<&str>,
-        right_hint: Option<&str>,
-    ) -> CandidateList {
-        let candidates = CandidateList::new(
-            self.build_conversion_candidates(reading, MAX_SEGMENT_CANDIDATES, false)
-                .into_iter()
-                .map(|candidate| candidate.into_ui_candidate(reading))
-                .collect(),
-        );
-        self.prepend_segment_learning(reading, candidates, left_hint, right_hint)
-            .0
     }
 
     /// Build boundary-adjustment candidates without invoking the neural model.
@@ -1199,6 +1340,26 @@ impl InputMethodEngine {
         left_hint: Option<&str>,
         right_hint: Option<&str>,
     ) -> CandidateList {
+        let prefix: String = reading.chars().take_while(|&ch| ch == 'ー').collect();
+        if !prefix.is_empty() {
+            let rest = &reading[prefix.len()..];
+            if rest.is_empty() {
+                return CandidateList::from_strings_with_reading([reading], reading);
+            }
+            let candidates = self.boundary_candidate_list(rest, left_hint, right_hint);
+            return CandidateList::new(
+                candidates
+                    .candidates()
+                    .iter()
+                    .cloned()
+                    .map(|mut candidate| {
+                        candidate.text = format!("{prefix}{}", candidate.text);
+                        candidate.reading = Some(reading.to_string());
+                        candidate
+                    })
+                    .collect(),
+            );
+        }
         let mut seen = HashSet::new();
         let mut values = Vec::new();
         for candidate in self
@@ -1254,7 +1415,24 @@ impl InputMethodEngine {
         };
 
         let generated =
-            self.segment_candidate_list(&reading, left_hint.as_deref(), right_hint.as_deref());
+            self.boundary_candidate_list(&reading, left_hint.as_deref(), right_hint.as_deref());
+        if let InputState::Conversion { session } = &self.state
+            && let Some(segment) = session.active()
+            && let Some(worker) = &self.converters.kanji
+        {
+            self.pending_segment_models
+                .retain(|job| job.range != segment.reading_range);
+            self.pending_segment_models.push(PendingSegmentModel {
+                reading: reading.clone(),
+                range: segment.reading_range.clone(),
+                session_reading: session.reading.clone(),
+                response: worker.convert_async(
+                    &reading,
+                    &self.truncate_context_for_api(),
+                    MAX_SEGMENT_CANDIDATES,
+                ),
+            });
+        }
         let mut seen = HashSet::from([preserved_surface.clone()]);
         let mut values = vec![Candidate {
             text: preserved_surface,
@@ -1282,9 +1460,8 @@ impl InputMethodEngine {
     /// character from the next segment; shrinking gives its last character to
     /// the next segment. Shrinking the final (or only) segment creates a new
     /// trailing segment. Expanding through a one-character next segment merges
-    /// it into the active segment. The visible surface is preserved and model
-    /// alternatives for the active segment are rebuilt before the resized
-    /// state is shown, so the first navigation key uses the visible list.
+    /// it into the active segment. Keep the visible surface when it can be
+    /// aligned to the new boundaries; model alternatives arrive asynchronously.
     fn resize_conversion_segment(&mut self, expand: bool) -> EngineResult {
         let proposal = {
             let InputState::Conversion { session } = &self.state else {
@@ -1548,6 +1725,8 @@ impl InputMethodEngine {
 
         self.record_modified_segments();
 
+        self.segmentation.clear();
+        self.pending_segment_models.clear();
         self.state = InputState::Empty;
         self.input_buf.text.clear();
         self.clear_composing_candidates();
@@ -1568,6 +1747,8 @@ impl InputMethodEngine {
 
         self.record_modified_segments();
 
+        self.segmentation.clear();
+        self.pending_segment_models.clear();
         self.state = InputState::Empty;
         self.input_buf.text.clear();
         self.clear_composing_candidates();
@@ -1584,39 +1765,58 @@ impl InputMethodEngine {
         result
     }
 
-    /// Cancel conversion and return to hiragana
+    /// Cancel correction and restore the original live first candidate.
     pub(super) fn cancel_conversion(&mut self) -> EngineResult {
-        if !matches!(self.state, InputState::Conversion { .. }) {
+        let InputState::Conversion { session } = &self.state else {
             return EngineResult::not_consumed();
-        }
-        let reading = self.input_buf.text.clone();
-
-        if reading.is_empty() {
-            self.state = InputState::Empty;
-            self.input_buf.clear();
-            self.clear_composing_candidates();
-            return EngineResult::consumed()
-                .with_action(EngineAction::UpdatePreedit(Preedit::new()))
-                .with_action(EngineAction::HideCandidates)
-                .with_action(EngineAction::HideAuxText);
-        }
-
-        // Set up composed_hiragana with the reading
+        };
+        let reading = session.reading.clone();
+        let mut candidates = if session.is_whole_candidate_phase() {
+            session.candidates().cloned().unwrap_or_default()
+        } else if let Some((_, candidates)) = self
+            .segmentation
+            .live_candidates
+            .as_ref()
+            .filter(|(saved_reading, _)| saved_reading == &reading)
+        {
+            candidates.clone()
+        } else {
+            let surface = self
+                .segmentation
+                .requested
+                .as_ref()
+                .filter(|snapshot| snapshot.reading == reading)
+                .map(|snapshot| snapshot.surface.clone())
+                .unwrap_or_else(|| {
+                    session
+                        .segments
+                        .iter()
+                        .filter_map(|part| {
+                            part.candidates
+                                .candidates()
+                                .first()
+                                .map(|candidate| candidate.text.as_str())
+                        })
+                        .collect()
+                });
+            CandidateList::from_strings_with_reading([surface], &reading)
+        };
+        candidates.reset();
+        let surface = candidates.selected_text().unwrap_or(&reading).to_string();
+        self.segmentation.entering = false;
+        self.pending_segment_models.clear();
         self.input_buf.text = reading.clone();
-        self.input_buf.cursor_pos = self.input_buf.text.chars().count();
-
-        // Reset romaji converter and set output to reading
+        self.input_buf.cursor_pos = reading.chars().count();
         self.converters.romaji.reset();
-        // We need to push each character to rebuild the state
-        for ch in reading.chars() {
-            self.converters.romaji.push(ch);
-        }
-
+        self.live.set_applied_prefix(reading.clone(), surface);
+        self.live.rebuild_for_reading(&reading);
+        self.composing_candidate_selected = false;
+        self.composing_candidates_model_ready = true;
+        let candidates = self.set_composing_candidates(candidates);
         let preedit = self.set_composing_state();
-
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
-            .with_action(EngineAction::HideCandidates)
+            .with_action(EngineAction::ShowCandidates(candidates))
             .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()))
     }
 
@@ -1678,16 +1878,6 @@ impl InputMethodEngine {
         self.navigate_candidate(CandidateList::move_prev)
     }
 
-    /// Go to next candidate page
-    fn next_candidate_page(&mut self) -> EngineResult {
-        self.navigate_candidate(CandidateList::next_page)
-    }
-
-    /// Go to previous candidate page
-    fn prev_candidate_page(&mut self) -> EngineResult {
-        self.navigate_candidate(CandidateList::prev_page)
-    }
-
     /// Select and commit the candidate at `page_index` (0-based) within the
     /// current page, like pressing the digit key `page_index + 1`. Not
     /// consumed unless a candidate list is active (Conversion state).
@@ -1730,6 +1920,15 @@ impl InputMethodEngine {
 
     /// Update preedit after candidate selection change
     fn update_conversion_preedit(&mut self, candidates: &CandidateList) -> EngineResult {
+        if let InputState::Conversion { session } = &self.state
+            && session.is_whole_candidate_phase()
+            && candidates.cursor() > 0
+            && let Some(first) = candidates.candidates().first()
+        {
+            let reading = session.reading.clone();
+            let surface = first.text.clone();
+            self.prepare_segmentation(&reading, &surface);
+        }
         let (preedit, reading) = match &mut self.state {
             InputState::Conversion { session } => {
                 session.rebuild_preedit();

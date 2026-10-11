@@ -63,7 +63,7 @@ cargo test -p karukan-im
 cd karukan-macos
 
 make test      # Swift tests (incl. integration tests against a real karukan-imserver)
-make install   # Build, assemble Karukan.app, install to ~/Library/Input Methods (auto-downloads dict.bin if missing and prefetches all models.toml models into the HF cache)
+make install   # Build, assemble Karukan.app, install to ~/Library/Input Methods (auto-downloads dict.bin if missing and prefetches the configured model into the HF cache)
 ```
 
 First install requires logout/login; afterwards `make install` + `killall KarukanIME` suffices.
@@ -118,10 +118,10 @@ cargo clippy --workspace  # Lint all crates
   - `chunk.rs` — Live-conversion chunking: the Japanese/non-Japanese split (`is_japanese`, `group_chunks`), incremental re-chunk diff (`ChunkPlan`), and `chunked_auto_suggest`
   - `cursor.rs` — Cursor movement
   - `display.rs` — Preedit text display
-  - `mode.rs` — Mode switching (katakana, alphabet, live conversion)
   - `init.rs` — Model loading, dictionary setup, correction learning init
-  - `strategy.rs` — Conversion strategy determination and adaptive model selection
-  - `tests.rs` — Engine unit tests
+  - `async_live.rs` — Background model inference and live snapshot results
+  - `segmentation.rs` — Speculative background morphology, keyed by reading/first surface/generation
+  - `tests/` — Engine unit tests
 - `core/preedit.rs` — Preedit composition with cursor support
 - `core/candidate.rs` — Candidate list with pagination support
 - `core/keycode.rs` — Key symbol definitions and key event handling
@@ -135,7 +135,7 @@ Swift/InputMethodKit frontend. All IME state lives in karukan-imserver (spawned 
 
 - `main.swift` — IMKServer startup, engine process spawn, wake-from-sleep restart, SIGPIPE handling
 - `KarukanInputController.swift` — IMKInputController; translates keys, applies engine actions (preedit/candidates/commit), JIS かな key and right-Command tap return to hiragana (exit katakana mode)
-- `KeyCodeMap.swift` — NSEvent → XKB keysym translation, RightCommandTapDetector
+- `KeyCodeMap.swift` — NSEvent → XKB keysym translation, external right-Command-to-kana remapping
 - `resources/*.tiff` — template menu icon (か), regenerated via `swift scripts/generate_icons.swift`; `resources/{ja,en}.lproj/InfoPlist.strings` localize the input mode name shown in the input menu
 - `EngineProcess.swift` — child process lifecycle: crash restart with exponential backoff, EOF-based clean shutdown (lets the server save its learning cache)
 - `EngineClient.swift` — JSON-RPC transport (sync for process_key, async for fire-and-forget)
@@ -155,11 +155,13 @@ The engine-internal `InputMode::Alphabet` (entered via Shift+letter) is a separa
 - RomajiConverter accumulates output; consumed into input_buf via delta tracking
 - Models use jinen format with special Unicode tokens (U+EE00–U+EE02) from the Private Use Area; model input is katakana (hiragana is converted to katakana before inference)
 - Model registry defined in `karukan-engine/models.toml`; default models use Q5_K_M quantization
-- Live conversion (auto-suggest) splits the composing buffer into internal chunks of at most `composing_chunk_len` reading chars (default 40, configurable) so each model call stays bounded for long input. Chunking (`group_chunks`) starts a new chunk whenever the current one is full OR the character group changes between Japanese and non-Japanese (`is_japanese`: hiragana, katakana except `・`, and kanji are Japanese; ASCII/full-width digits, letters, symbols, all punctuation, and `・` are non-Japanese). A non-Japanese run (digits/symbols/alphabet) is passed through to the preedit verbatim and never sent to the neural converter (which otherwise tends to drop digits mid-run, e.g. `123456`); a Japanese run is converted by the model. Because punctuation is non-Japanese, it forms its own chunk and naturally separates clauses (`今日は。明日` → `今日は`/`。`/`明日`), so there is no separate punctuation rule. Prolonged sound marks `ー` stay in the Japanese run and are sent to the model with the surrounding word, so `スーパーマーケット` stays together unless the chunk length cap is reached. A final pending romaji `w` is preserved when committing or selecting a live-conversion surface; it stays buffered during typing so `wa`/`wi`/`we`/`wo` still convert normally. `chunked_auto_suggest` re-chunks incrementally: it diffs the new buffer against the previous chunking by common character prefix/suffix and reconverts only the changed span (`ChunkPlan` decides which leading/trailing chunks to reuse). Each chunk's left context (lctx) is the editor surrounding text plus the converted text of the preceding chunks, truncated to `max_context_length`. Chunks are internal — the user sees one continuous preedit, and the aux text shows the current chunk's lctx as its single `lctx:`
+- Live conversion (auto-suggest) splits the composing buffer into internal chunks of at most `composing_chunk_len` reading chars (default 30, configurable) so each model call stays bounded for long input. Chunking (`group_chunks`) starts a new chunk whenever the current one is full OR the character group changes between Japanese and non-Japanese (`is_japanese`: hiragana, katakana except `・`, and kanji are Japanese; ASCII/full-width digits, letters, symbols, all punctuation, and `・` are non-Japanese). A non-Japanese run (digits/symbols/alphabet) is passed through to the preedit verbatim and never sent to the neural converter (which otherwise tends to drop digits mid-run, e.g. `123456`); a Japanese run is converted by the model. Because punctuation is non-Japanese, it forms its own chunk and naturally separates clauses (`今日は。明日` → `今日は`/`。`/`明日`), so there is no separate punctuation rule. Leading prolonged sound marks `ー` are preserved literally; interior marks stay in the Japanese run and are sent to the model with the surrounding word, so `スーパーマーケット` stays together unless the chunk length cap is reached. A final pending romaji `w` is preserved when committing or selecting a live-conversion surface; it stays buffered during typing so `wa`/`wi`/`we`/`wo` still convert normally. `chunked_auto_suggest` re-chunks incrementally: it diffs the new buffer against the previous chunking by common character prefix/suffix and reconverts only the changed span (`ChunkPlan` decides which leading/trailing chunks to reuse). Each chunk's left context (lctx) is the editor surrounding text plus the converted text of the preceding chunks, truncated to `max_context_length`. Chunks are internal — the user sees one continuous preedit, and the aux text shows the current chunk's lctx as its single `lctx:`
+- Live conversion is always active; there is no `live_conversion` setting or disabled state. Full-width space uses Shift+Space. Page Up/Down, F9/F10, Ctrl shortcuts, and candidate clicks have no IME bindings.
+- Segment correction always analyzes and preserves live candidate 1, including each segment's first surface. Morphology starts in the background when the live reading finishes (checkmark) or the user starts selecting later candidates. Entry never waits for morphology/model alternatives; stale preparation results must not change a newer session.
 - Correction learning records only explicitly changed conversion segments with surrounding context; accepting live or initial candidates does not learn, and previous sentences are never offered by prefix match
 - Data files (system dictionary `dict.bin`, user dictionaries `user_dicts/`, correction learning `segment_learning.tsv`) live in `~/Library/Application Support/com.karukan.karukan-im/`; a prebuilt `dict.tgz` is published on GitHub releases
 - Correction learning is persisted as TSV (`segment_learning.tsv` in the data directory); saved on deactivate and engine free, not on every commit. Legacy `learning.tsv` files are left untouched but are no longer loaded
-- Learning score uses recency-weighted formula (mozc-inspired): `recency * 10.0 + ln(1 + frequency)`; eviction removes lowest-score entries when over `max_entries` (default: 10,000)
+- Learning score uses recency-weighted formula (mozc-inspired): `recency * 10.0 + ln(1 + frequency)`; segment-learning eviction removes entries with the oldest recording timestamps when over `max_entries` (default: 10,000)
 
 ## Training (karukan-jinen)
 

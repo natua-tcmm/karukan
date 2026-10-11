@@ -15,8 +15,7 @@ const XKB_KEY_SPACE: u32 = Keysym::SPACE.0;
 const XKB_KEY_COLON: u32 = b':' as u32;
 
 fn test_server() -> ImServer {
-    let mut settings = Settings::default();
-    settings.conversion.live_conversion = false;
+    let settings = Settings::default();
     ImServer::with_settings(settings)
 }
 
@@ -150,8 +149,8 @@ fn test_escape_does_not_cancel_composition() {
     press(&mut server, XKB_KEY_K);
     press(&mut server, XKB_KEY_A);
     let resp = press(&mut server, XKB_KEY_ESCAPE);
-    assert_eq!(resp["result"]["consumed"], false);
-    assert!(actions_of(&resp, "update_preedit").is_empty());
+    assert_eq!(resp["result"]["consumed"], true);
+    assert_eq!(actions_of(&resp, "update_preedit")[0]["text"], "か");
 }
 
 #[test]
