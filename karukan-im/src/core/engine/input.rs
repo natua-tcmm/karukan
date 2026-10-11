@@ -137,6 +137,7 @@ impl InputMethodEngine {
 
     /// Refresh the input state: rebuild preedit and run auto-suggest for candidates.
     pub(super) fn refresh_input_state(&mut self) -> EngineResult {
+        self.live_paused = false;
         if self.input_mode == InputMode::Emoji {
             return self.refresh_emoji_state();
         }
@@ -382,7 +383,8 @@ impl InputMethodEngine {
         let Some(result) = result else {
             return prepared;
         };
-        if result.revision <= self.live_cancel_revision
+        if self.live_paused
+            || result.revision <= self.live_cancel_revision
             || !matches!(self.state, InputState::Composing { .. })
             || !self.input_buf.text.starts_with(&result.reading)
         {
@@ -553,6 +555,7 @@ impl InputMethodEngine {
     /// Start input with a character (first character of a new input session).
     /// In alphabet mode, inserts directly; otherwise goes through romaji conversion.
     pub(super) fn start_input(&mut self, ch: char) -> EngineResult {
+        self.live_paused = false;
         self.segmentation.clear();
         self.pending_segment_models.clear();
         self.converters.romaji.reset();
@@ -635,6 +638,12 @@ impl InputMethodEngine {
             Keysym::TAB | Keysym::DOWN if self.input_mode == InputMode::Emoji => {
                 self.select_next_composing_candidate()
             }
+            Keysym::SPACE | Keysym::TAB | Keysym::DOWN if self.live_paused => {
+                self.flush_romaji_to_composed();
+                self.converters.romaji.reset();
+                self.refresh_input_state()
+            }
+            Keysym::UP if self.live_paused => EngineResult::consumed(),
             Keysym::UP => self.select_prev_composing_candidate(),
             Keysym::SPACE | Keysym::TAB | Keysym::DOWN if self.composing_candidate_selected => {
                 self.select_next_composing_candidate()
@@ -676,38 +685,20 @@ impl InputMethodEngine {
         }
     }
 
-    /// Cancel candidate selection without disabling live conversion.
-    fn cancel_live_composing(&mut self) -> EngineResult {
-        let was_selected = self.composing_candidate_selected;
-        self.composing_candidate_selected = false;
-        let candidates = self.composing_candidates.as_mut().map(|candidates| {
-            candidates.reset();
-            candidates.clone()
-        });
-        if was_selected
-            && let Some(first) = candidates
-                .as_ref()
-                .and_then(|candidates| candidates.candidates().first())
-        {
-            self.live.text = first.text.clone();
-            if self.composing_candidates_model_ready {
-                self.live
-                    .set_applied_prefix(self.input_buf.text.clone(), first.text.clone());
-            }
-        }
-        if was_selected && self.converters.kanji.is_some() {
-            self.submit_live_inference();
-        }
+    /// Restore the reading and pause only this composition's live conversion.
+    pub(super) fn cancel_live_composing(&mut self) -> EngineResult {
+        self.invalidate_live_results();
+        self.segmentation.clear();
+        self.pending_segment_models.clear();
+        self.live.clear();
+        self.chunks.clear();
+        self.clear_composing_candidates();
+        self.live_paused = true;
         let preedit = self.set_composing_state();
-        let mut result = EngineResult::consumed()
+        EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
-            .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()));
-        if let Some(candidates) = candidates {
-            result
-                .actions
-                .push(EngineAction::ShowCandidates(candidates));
-        }
-        result
+            .with_action(EngineAction::HideCandidates)
+            .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()))
     }
 
     /// Begin a new emoji-shortcode composing session.

@@ -490,7 +490,6 @@ impl InputMethodEngine {
         full_candidates: CandidateList,
     ) -> crate::core::state::ConversionSession {
         // Always freeze candidate 1, never the currently highlighted alternative.
-        self.segmentation.live_candidates = Some((reading.to_string(), full_candidates.clone()));
         let surface = full_candidates
             .candidates()
             .first()
@@ -1765,59 +1764,16 @@ impl InputMethodEngine {
         result
     }
 
-    /// Cancel correction and restore the original live first candidate.
+    /// Cancel correction, restore the reading, and pause live conversion.
     pub(super) fn cancel_conversion(&mut self) -> EngineResult {
         let InputState::Conversion { session } = &self.state else {
             return EngineResult::not_consumed();
         };
         let reading = session.reading.clone();
-        let mut candidates = if session.is_whole_candidate_phase() {
-            session.candidates().cloned().unwrap_or_default()
-        } else if let Some((_, candidates)) = self
-            .segmentation
-            .live_candidates
-            .as_ref()
-            .filter(|(saved_reading, _)| saved_reading == &reading)
-        {
-            candidates.clone()
-        } else {
-            let surface = self
-                .segmentation
-                .requested
-                .as_ref()
-                .filter(|snapshot| snapshot.reading == reading)
-                .map(|snapshot| snapshot.surface.clone())
-                .unwrap_or_else(|| {
-                    session
-                        .segments
-                        .iter()
-                        .filter_map(|part| {
-                            part.candidates
-                                .candidates()
-                                .first()
-                                .map(|candidate| candidate.text.as_str())
-                        })
-                        .collect()
-                });
-            CandidateList::from_strings_with_reading([surface], &reading)
-        };
-        candidates.reset();
-        let surface = candidates.selected_text().unwrap_or(&reading).to_string();
-        self.segmentation.entering = false;
-        self.pending_segment_models.clear();
-        self.input_buf.text = reading.clone();
         self.input_buf.cursor_pos = reading.chars().count();
+        self.input_buf.text = reading;
         self.converters.romaji.reset();
-        self.live.set_applied_prefix(reading.clone(), surface);
-        self.live.rebuild_for_reading(&reading);
-        self.composing_candidate_selected = false;
-        self.composing_candidates_model_ready = true;
-        let candidates = self.set_composing_candidates(candidates);
-        let preedit = self.set_composing_state();
-        EngineResult::consumed()
-            .with_action(EngineAction::UpdatePreedit(preedit))
-            .with_action(EngineAction::ShowCandidates(candidates))
-            .with_action(EngineAction::UpdateAuxText(self.format_aux_composing()))
+        self.cancel_live_composing()
     }
 
     /// Navigate candidates with the given operation, then update preedit

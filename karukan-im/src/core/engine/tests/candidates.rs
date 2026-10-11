@@ -740,3 +740,47 @@ fn test_empty_live_text_not_added_to_candidates() {
         );
     }
 }
+
+#[test]
+fn space_resumes_paused_live_conversion_at_first_candidate() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with("あい", "愛"));
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press_key(Keysym::ESCAPE));
+    assert_eq!(engine.preedit().unwrap().text(), "あい");
+    let result = engine.process_key(&press_key(Keysym::SPACE));
+    assert!(result.consumed);
+    assert!(!engine.live_paused);
+    assert!(matches!(engine.state, InputState::Composing { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), "愛");
+    assert_eq!(engine.composing_candidates.as_ref().unwrap().cursor(), 0);
+    assert!(!engine.composing_candidate_selected);
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert!(matches!(engine.state, InputState::Conversion { .. }));
+}
+
+#[test]
+fn typing_after_escape_resumes_conversion_for_extended_reading() {
+    let mut engine = make_live_conversion_engine();
+    engine.dicts.user = Some(user_dict_with("あいう", "愛う"));
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press_key(Keysym::ESCAPE));
+    engine.process_key(&press('u'));
+    assert!(!engine.live_paused);
+    assert_eq!(engine.preedit().unwrap().text(), "愛う");
+}
+
+#[test]
+fn space_resuming_conversion_flushes_pending_romaji() {
+    let mut engine = make_live_conversion_engine();
+    engine.process_key(&press('a'));
+    engine.process_key(&press('k'));
+    engine.process_key(&press_key(Keysym::ESCAPE));
+    assert_eq!(engine.preedit().unwrap().text(), "あk");
+    engine.process_key(&press_key(Keysym::SPACE));
+    assert_eq!(engine.input_buf.text, "あk");
+    assert!(engine.converters.romaji.buffer().is_empty());
+    assert!(matches!(engine.state, InputState::Composing { .. }));
+}

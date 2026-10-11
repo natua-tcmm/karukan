@@ -326,6 +326,8 @@ pub struct InputMethodEngine {
     input_buf: InputBuffer,
     /// Live conversion state
     live: LiveConversion,
+    /// Esc pauses this composition until text is edited or Space resumes it.
+    live_paused: bool,
     /// Auto-suggest candidates shown while still in Composing state.
     ///
     /// Space, Tab, and Down open the explicit conversion list. This composing-time
@@ -390,6 +392,7 @@ impl InputMethodEngine {
             pre_emoji_mode: None,
             input_buf: InputBuffer::new(),
             live: LiveConversion::default(),
+            live_paused: false,
             composing_candidates: None,
             composing_candidate_selected: false,
             composing_candidates_model_ready: false,
@@ -407,6 +410,7 @@ impl InputMethodEngine {
     pub fn with_config(config: EngineConfig) -> Self {
         Self {
             live: LiveConversion::default(),
+            live_paused: false,
             config,
             ..Self::new()
         }
@@ -453,6 +457,7 @@ impl InputMethodEngine {
     /// It is set once at activation time and should persist through
     /// the session. A reset before the first key event must not wipe it.
     pub fn reset(&mut self) {
+        self.live_paused = false;
         self.invalidate_live_results();
         self.segmentation.clear();
         self.pending_segment_models.clear();

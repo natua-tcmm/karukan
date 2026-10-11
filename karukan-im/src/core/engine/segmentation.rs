@@ -104,7 +104,6 @@ pub(super) struct SegmentationPreparation {
     pub requested: Option<Snapshot>,
     pub prepared: Option<Vec<SurfaceSegment>>,
     pub entering: bool,
-    pub live_candidates: Option<(String, crate::core::candidate::CandidateList)>,
 }
 
 impl SegmentationPreparation {
@@ -113,6 +112,5 @@ impl SegmentationPreparation {
         self.requested = None;
         self.prepared = None;
         self.entering = false;
-        self.live_candidates = None;
     }
 }

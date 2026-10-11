@@ -99,53 +99,53 @@ fn other_pending_consonants_keep_existing_live_commit_behavior() {
 // --- Live conversion tests ---
 
 #[test]
-fn test_live_conversion_escape_preserves_live_first() {
-    // Escape is reserved for conversion-mode cancel; during composing the IME
-    // leaves the current input/live text untouched.
+fn escape_restores_reading_and_pauses_until_input() {
     let mut engine = make_live_conversion_engine();
-
-    // Type "ai" -> "あい"
     engine.process_key(&press('a'));
     engine.process_key(&press('i'));
-
-    // Simulate live conversion being active
-    engine.live.text = "愛".to_string();
-
-    // Press Escape -> consume it without disabling live conversion.
+    engine.live.text = "愛".into();
+    engine.live.set_applied_prefix("あい".into(), "愛".into());
+    let revision = engine.live_revision;
     let result = engine.process_key(&press_key(Keysym::ESCAPE));
     assert!(result.consumed);
-    assert_eq!(engine.live.text, "愛");
-    assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.preedit().unwrap().text(), "愛");
+    assert!(engine.live_paused);
+    assert!(engine.live.text.is_empty());
+    assert!(engine.composing_candidates.is_none());
+    assert_eq!(engine.preedit().unwrap().text(), "あい");
+    assert!(!engine.live_conversion_finished("あい"));
+    assert!(engine.live_cancel_revision > revision);
     assert!(
         result
             .actions
             .iter()
-            .any(|action| matches!(action, EngineAction::UpdatePreedit(_)))
+            .any(|action| matches!(action, EngineAction::HideCandidates))
     );
+    engine.process_key(&press('u'));
+    assert!(!engine.live_paused);
+    assert_eq!(engine.input_buf.text, "あいう");
 }
 
 #[test]
-fn test_live_conversion_escape_twice_keeps_live_first() {
+fn repeated_escape_and_cursor_movement_keep_conversion_paused() {
     let mut engine = make_live_conversion_engine();
-
     engine.process_key(&press('a'));
     engine.process_key(&press('i'));
-
-    // Set live conversion text
-    engine.live.text = "愛".to_string();
-
-    let first = engine.process_key(&press_key(Keysym::ESCAPE));
-    assert!(first.consumed);
-    assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.live.text, "愛");
-    assert_eq!(engine.preedit().unwrap().text(), "愛");
-
-    let second = engine.process_key(&press_key(Keysym::ESCAPE));
-    assert!(second.consumed);
-    assert!(matches!(engine.state(), InputState::Composing { .. }));
-    assert_eq!(engine.live.text, "愛");
-    assert_eq!(engine.preedit().unwrap().text(), "愛");
+    engine.live.text = "愛".into();
+    for key in [Keysym::ESCAPE, Keysym::ESCAPE, Keysym::LEFT, Keysym::RIGHT] {
+        assert!(engine.process_key(&press_key(key)).consumed);
+        assert!(engine.live_paused);
+        assert_eq!(engine.preedit().unwrap().text(), "あい");
+        assert!(engine.poll_live_conversion().is_none());
+    }
+    let result = engine.process_key(&press_key(Keysym::RETURN));
+    assert!(
+        result
+            .actions
+            .iter()
+            .any(|action| matches!(action, EngineAction::Commit(text) if text == "あい"))
+    );
+    engine.process_key(&press('a'));
+    assert!(!engine.live_paused);
 }
 
 #[test]
@@ -479,4 +479,66 @@ fn test_ctrl_shift_l_does_not_show_aux_text() {
         .iter()
         .any(|a| matches!(a, EngineAction::UpdateAuxText(text) if text.contains("ライブ変換")));
     assert!(!has_aux);
+}
+
+#[test]
+fn escape_rejects_late_inference_and_space_requests_whole_reading() {
+    use crate::core::engine::async_live::{InferenceWorker, LiveInferenceResult};
+    let (worker, results) = InferenceWorker::controlled();
+    let mut engine = make_live_conversion_engine();
+    engine.converters.kanji = Some(worker);
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    let old = engine
+        .converters
+        .kanji
+        .as_ref()
+        .unwrap()
+        .take_pending_live()
+        .unwrap();
+    engine.process_key(&press_key(Keysym::ESCAPE));
+    results
+        .send(LiveInferenceResult {
+            revision: old.revision,
+            reading: old.reading,
+            chunks: Vec::new(),
+            candidates: Some(vec!["愛".into()]),
+            conversion_ms: 0,
+        })
+        .unwrap();
+    assert!(engine.poll_live_conversion().is_none());
+    assert_eq!(engine.preedit().unwrap().text(), "あい");
+    assert!(
+        engine
+            .converters
+            .kanji
+            .as_ref()
+            .unwrap()
+            .take_pending_live()
+            .is_none()
+    );
+    engine.process_key(&press_key(Keysym::SPACE));
+    let resumed = engine
+        .converters
+        .kanji
+        .as_ref()
+        .unwrap()
+        .take_pending_live()
+        .unwrap();
+    assert_eq!(resumed.reading, "あい");
+    assert!(resumed.old_chunks.is_empty());
+    assert!(matches!(engine.state, InputState::Composing { .. }));
+    results
+        .send(LiveInferenceResult {
+            revision: resumed.revision,
+            reading: resumed.reading,
+            chunks: Vec::new(),
+            candidates: Some(vec!["愛".into(), "藍".into()]),
+            conversion_ms: 0,
+        })
+        .unwrap();
+    assert!(engine.poll_live_conversion().is_some());
+    assert_eq!(engine.preedit().unwrap().text(), "愛");
+    assert_eq!(engine.composing_candidates.as_ref().unwrap().cursor(), 0);
+    assert!(engine.live_conversion_finished("あい"));
 }

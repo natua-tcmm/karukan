@@ -83,6 +83,28 @@ impl InferenceWorker {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn controlled() -> (Self, Sender<LiveInferenceResult>) {
+        let (sender, results) = mpsc::channel();
+        (
+            Self {
+                shared: Arc::new(Shared {
+                    state: Mutex::new(WorkerState::default()),
+                    wake: Condvar::new(),
+                }),
+                results,
+                thread: None,
+                model_name: "test".into(),
+            },
+            sender,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn take_pending_live(&self) -> Option<LiveInferenceRequest> {
+        self.shared.state.lock().unwrap().pending_live.take()
+    }
+
     pub(super) fn model_display_name(&self) -> &str {
         &self.model_name
     }

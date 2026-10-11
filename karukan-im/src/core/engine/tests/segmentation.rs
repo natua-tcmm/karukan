@@ -135,7 +135,7 @@ fn prepared_boundaries_are_installed_immediately_on_entry() {
 }
 
 #[test]
-fn escape_restores_live_first_and_its_alternatives_after_segment_correction() {
+fn escape_restores_reading_and_pauses_after_segment_correction() {
     let mut engine = live_engine();
     let (worker, requests, results) = SegmentationWorker::controlled();
     engine.segmentation.worker = Some(worker);
@@ -154,12 +154,11 @@ fn escape_restores_live_first_and_its_alternatives_after_segment_correction() {
     let result = engine.process_key(&press_key(Keysym::ESCAPE));
     assert!(result.consumed);
     assert!(matches!(engine.state, InputState::Composing { .. }));
-    assert_eq!(engine.preedit().unwrap().text(), "東京駅");
-    assert_eq!(engine.live.text, "東京駅");
-    assert_eq!(
-        engine.composing_candidates.as_ref().unwrap().candidates()[1].text,
-        "東京驛"
-    );
+    assert_eq!(engine.preedit().unwrap().text(), "とうきょうえき");
+    assert!(engine.live.text.is_empty());
+    assert!(engine.composing_candidates.is_none());
+    assert!(engine.live_paused);
+    assert!(engine.segmentation.requested.is_none());
     assert!(!engine.composing_candidate_selected);
 }
 
